@@ -4,7 +4,7 @@ require "tempfile"
 require "kubeclient"
 
 RSpec.describe KubeTraffic::Kubernetes::Client do
-  def write_kubeconfig(current_context: "test", extra_contexts: [])
+  def write_kubeconfig(current_context: "test", extra_contexts: [], namespace: nil)
     file = Tempfile.new(["kubeconfig", ".yml"])
     file.write(<<~YAML)
       apiVersion: v1
@@ -15,6 +15,7 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
         context:
           cluster: test
           user: test
+          #{namespace && "namespace: #{namespace}"}
       #{extra_contexts.join}
       clusters:
       - name: test
@@ -80,6 +81,63 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     described_class.connect(context: "staging", kubeconfig: kubeconfig.path)
 
     kubeconfig.close!
+  end
+
+  it "defaults to the default namespace when the context has none" do
+    kubeconfig = write_kubeconfig
+    api = instance_double(Kubeclient::Client)
+    allow(Kubeclient::Client).to receive(:new).and_return(api)
+
+    client = described_class.connect(kubeconfig: kubeconfig.path)
+
+    expect(client.namespace).to eq("default")
+  ensure
+    kubeconfig.close!
+  end
+
+  it "uses the kubeconfig context namespace when none is given" do
+    kubeconfig = write_kubeconfig(namespace: "apps")
+    api = instance_double(Kubeclient::Client)
+    allow(Kubeclient::Client).to receive(:new).and_return(api)
+
+    client = described_class.connect(kubeconfig: kubeconfig.path)
+
+    expect(client.namespace).to eq("apps")
+  ensure
+    kubeconfig.close!
+  end
+
+  it "prefers an explicit namespace over the kubeconfig context namespace" do
+    kubeconfig = write_kubeconfig(namespace: "apps")
+    api = instance_double(Kubeclient::Client)
+    allow(Kubeclient::Client).to receive(:new).and_return(api)
+
+    client = described_class.connect(namespace: "kube-system", kubeconfig: kubeconfig.path)
+
+    expect(client.namespace).to eq("kube-system")
+  ensure
+    kubeconfig.close!
+  end
+
+  it "raises when an explicit namespace is blank" do
+    kubeconfig = write_kubeconfig(namespace: "apps")
+    api = instance_double(Kubeclient::Client)
+    allow(Kubeclient::Client).to receive(:new).and_return(api)
+
+    expect {
+      described_class.connect(namespace: "  ", kubeconfig: kubeconfig.path)
+    }.to raise_error(
+      KubeTraffic::Kubernetes::ConfigError,
+      "namespace must not be empty"
+    )
+  ensure
+    kubeconfig.close!
+  end
+
+  it "uses the default namespace when an injected API has none" do
+    api = instance_double(Kubeclient::Client)
+
+    expect(described_class.new(api: api).namespace).to eq("default")
   end
 
   it "raises when kubeconfig is missing" do

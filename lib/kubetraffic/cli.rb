@@ -55,8 +55,8 @@ module KubeTraffic
       end
 
       target = TargetParser.parse(raw)
-      connect_to_cluster
-      @stdout.puts "Tracing #{target}"
+      client = connect_to_cluster
+      @stdout.puts "Tracing #{target} in namespace #{client.namespace}"
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
@@ -64,7 +64,12 @@ module KubeTraffic
     end
 
     def connect_to_cluster
-      Kubernetes::Client.connect(context: @options[:context]).verify_connection!
+      client = Kubernetes::Client.connect(
+        context: @options[:context],
+        namespace: @options[:namespace]
+      )
+      client.verify_connection!
+      client
     end
 
     def usage(status)
@@ -77,6 +82,9 @@ module KubeTraffic
         opts.banner = "Usage: kubetraffic [options] [COMMAND]"
         opts.on("-v", "--version", "Print version") do
           @options[:version] = true
+        end
+        opts.on("-n", "--namespace NAME", "Kubernetes namespace") do |namespace|
+          @options[:namespace] = namespace
         end
         opts.on("--context CONTEXT", "Kubernetes context") do |context|
           @options[:context] = context
