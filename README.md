@@ -7,8 +7,10 @@ accepts a `trace` target, connects read-only to the current Kubernetes context,
 matches the target host and path against Ingress rules in the selected
 namespace, reports the referenced backend Service name and port, fetches that
 Service to resolve the matching `spec.ports` entry, and lists EndpointSlices
-labeled for that Service. It does not yet resolve endpoints to Pods or
-`targetPort`.
+labeled for that Service. Ready, not-ready, and unknown endpoints are counted
+from retrieved `conditions.ready` values. `ready=true` and omitted/`nil` ready
+conditions are usable (Kubernetes treats nil as true); only `ready=false` is
+unusable. It does not yet resolve endpoints to Pods or `targetPort`.
 
 ```text
 $ bin/kubetraffic --version
@@ -25,6 +27,9 @@ Service api
   port 80 name http
 EndpointSlice api-abc
   10.1.2.3 ready=true
+  ready 1
+  not-ready 0
+  unknown readiness 0
 
 $ bin/kubetraffic --context staging -n apps trace api.example.com/users
 Tracing api.example.com/users in namespace apps
@@ -37,6 +42,9 @@ Service api
   port 80 name http
 EndpointSlice api-abc
   10.1.2.3 ready=true
+  ready 1
+  not-ready 0
+  unknown readiness 0
 ```
 
 `trace` loads kubeconfig from `KUBECONFIG` or `~/.kube/config` and verifies that
@@ -58,5 +66,7 @@ to a name or port 80. A numeric Ingress backend port is matched against
 `Service.spec.ports[].name`. A missing Service or unmatched Service port is
 reported without inventing a default port. EndpointSlices are selected with the
 `kubernetes.io/service-name` label in the same namespace. Missing slices and
-slices with no endpoints are reported. Endpoint readiness is shown as retrieved;
-unknown (`nil`) ready conditions are not treated as ready or not-ready.
+slices with no endpoints are reported. Endpoint readiness is shown as retrieved
+and summarized as ready, not-ready, and unknown counts. Endpoints with
+`ready=true` or omitted/`nil` `conditions.ready` are usable; unknown counts are
+display-only. Only `ready=false` is unusable.

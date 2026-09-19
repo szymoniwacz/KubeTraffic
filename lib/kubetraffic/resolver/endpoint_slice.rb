@@ -3,7 +3,23 @@
 module KubeTraffic
   module Resolver
     class EndpointSlice
-      Result = Data.define(:slices, :endpoints)
+      Result = Data.define(:slices, :endpoints) do
+        def ready_endpoints
+          endpoints.select { |endpoint| endpoint.ready == true }
+        end
+
+        def not_ready_endpoints
+          endpoints.select { |endpoint| endpoint.ready == false }
+        end
+
+        def unknown_readiness_endpoints
+          endpoints.select { |endpoint| endpoint.ready.nil? }
+        end
+
+        def usable_endpoints
+          endpoints.select { |endpoint| endpoint.ready != false }
+        end
+      end
 
       def self.resolve(slices, service)
         new(slices).resolve(service)

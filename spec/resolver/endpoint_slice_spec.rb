@@ -72,4 +72,35 @@ RSpec.describe KubeTraffic::Resolver::EndpointSlice do
 
     expect(result.slices.map(&:name)).to eq(%w[api-a api-b])
   end
+
+  it "classifies ready, not-ready, and unknown endpoints" do
+    result = resolve(
+      [
+        slice(
+          "api-abc",
+          service_name: "api",
+          endpoints: [
+            endpoint("10.0.0.1", ready: true),
+            endpoint("10.0.0.2", ready: false),
+            endpoint("10.0.0.3", ready: nil)
+          ]
+        )
+      ],
+      service
+    )
+
+    expect(result.ready_endpoints.map { |endpoint| endpoint.addresses }).to eq([["10.0.0.1"]])
+    expect(result.not_ready_endpoints.map { |endpoint| endpoint.addresses }).to eq([["10.0.0.2"]])
+    expect(result.unknown_readiness_endpoints.map { |endpoint| endpoint.addresses }).to eq([["10.0.0.3"]])
+    expect(result.usable_endpoints.map { |endpoint| endpoint.addresses }).to eq([["10.0.0.1"], ["10.0.0.3"]])
+  end
+
+  it "treats unknown readiness as usable" do
+    result = resolve(
+      [slice("api-abc", service_name: "api", endpoints: [endpoint("10.0.0.3", ready: nil)])],
+      service
+    )
+
+    expect(result.usable_endpoints).to eq([endpoint("10.0.0.3", ready: nil)])
+  end
 end
