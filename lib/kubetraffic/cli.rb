@@ -61,10 +61,12 @@ module KubeTraffic
       match = Resolver::Ingress.match(ingresses, target)
       service_result = resolve_service(match, client)
       endpoint_result = resolve_endpoint_slices(service_result, client)
+      pod_result = resolve_pods(endpoint_result, client)
       @stdout.puts "Tracing #{target} in namespace #{client.namespace}"
       print_ingress_match(match, ingresses, target, client.namespace)
       print_service_match(match, service_result, client.namespace)
       print_endpoint_slices(service_result, endpoint_result)
+      print_pods(endpoint_result, pod_result)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
@@ -175,6 +177,34 @@ module KubeTraffic
       return unless result.usable_endpoints.empty?
 
       @stdout.puts "No usable endpoints for Service #{service.name}"
+    end
+
+    def resolve_pods(endpoint_result, client)
+      return nil if endpoint_result.nil?
+
+      Resolver::Pod.resolve(endpoint_result.endpoints, client)
+    end
+
+    def print_pods(endpoint_result, result)
+      return if endpoint_result.nil? || result.nil?
+
+      if endpoint_result.endpoints.any? && result.pods.empty? && result.missing.empty?
+        @stdout.puts "No Pod target references"
+        return
+      end
+
+      result.pods.each do |pod|
+        @stdout.puts "Pod #{pod.name}"
+        @stdout.puts "  IP #{pod.ip || "(unknown)"}"
+        @stdout.puts "  phase #{pod.phase || "(unknown)"}"
+        @stdout.puts "  ready=#{format_ready(pod.ready)}"
+      end
+
+      result.missing.each do |ref|
+        namespace = present(ref.namespace)
+        suffix = namespace ? " in namespace #{namespace}" : ""
+        @stdout.puts "Pod #{ref.name} not found#{suffix}"
+      end
     end
 
     def format_endpoint(endpoint)

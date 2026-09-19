@@ -616,6 +616,88 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     )
   end
 
+  it "maps an EndpointSlice Pod targetRef" do
+    slices = listed_slices(
+      [
+        slice_resource(
+          name: "api-abc",
+          endpoints: [
+            {
+              "addresses" => ["10.1.2.3"],
+              "conditions" => { "ready" => true },
+              "targetRef" => { "kind" => "Pod", "namespace" => "apps", "name" => "api-abc" }
+            }
+          ]
+        )
+      ]
+    )
+
+    expect(slices.first.endpoints.first.target_ref).to eq(
+      KubeTraffic::Kubernetes::TargetRef.new(kind: "Pod", namespace: "apps", name: "api-abc")
+    )
+  end
+
+  it "fetches a Pod from the selected namespace" do
+    api = double("api")
+    expect(api).to receive(:get_pod).with("api-abc", "apps").and_return(
+      Kubeclient::Resource.new(
+        "metadata" => { "name" => "api-abc", "namespace" => "apps" },
+        "status" => {
+          "podIP" => "10.1.2.3",
+          "phase" => "Running",
+          "conditions" => [
+            { "type" => "Ready", "status" => "True" }
+          ]
+        }
+      )
+    )
+
+    pod = described_class.new(
+      api: api,
+      networking_api: double("networking_api"),
+      discovery_api: double("discovery_api"),
+      namespace: "apps"
+    ).get_pod("api-abc")
+
+    expect(pod).to eq(
+      KubeTraffic::Kubernetes::Pod.new(
+        name: "api-abc",
+        namespace: "apps",
+        ip: "10.1.2.3",
+        phase: "Running",
+        ready: true
+      )
+    )
+  end
+
+  it "returns nil when the Pod is missing" do
+    api = double("api")
+    allow(api).to receive(:get_pod).with("api-abc", "apps")
+      .and_raise(http_error(404, "pods \"api-abc\" not found"))
+
+    expect(
+      described_class.new(
+        api: api,
+        networking_api: double("networking_api"),
+        discovery_api: double("discovery_api"),
+        namespace: "apps"
+      ).get_pod("api-abc")
+    ).to be_nil
+  end
+
+  it "does not query the API for a blank Pod name" do
+    api = double("api")
+    expect(api).not_to receive(:get_pod)
+
+    expect(
+      described_class.new(
+        api: api,
+        networking_api: double("networking_api"),
+        discovery_api: double("discovery_api")
+      ).get_pod(" ")
+    ).to be_nil
+  end
+
   it "preserves unknown EndpointSlice readiness instead of inventing true or false" do
     slices = listed_slices(
       [
