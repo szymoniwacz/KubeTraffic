@@ -556,6 +556,10 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("Target port 8080\n")
+    expect(stdout).to include("No declared containerPort matches 8080\n")
+    expect(stdout).to include(
+      "declared containerPort is configuration, not proof a process is listening\n"
+    )
     expect(stderr).to eq("")
   end
 
@@ -581,6 +585,10 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("Target port named http\n  api-abc 8080\n")
+    expect(stdout).to include("Container api on Pod api-abc\n  port 8080 name http\n")
+    expect(stdout).to include(
+      "declared containerPort is configuration, not proof a process is listening\n"
+    )
     expect(stderr).to eq("")
   end
 
@@ -645,6 +653,36 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("Named targetPort http unresolved\n  api-abc (not declared)\n")
+    expect(stdout).not_to include("Container ")
+    expect(stdout).not_to include("declared containerPort")
+    expect(stderr).to eq("")
+  end
+
+  it "shows the container port step for a numeric targetPort" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service(ports: [service_port(80, name: "http", target_port_number: 8080)]),
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.3", target_ref: target_ref("api-abc"))]
+        )
+      ],
+      pods: {
+        ["apps", "api-abc"] => mapped_pod(
+          containers: [container("api", container_port(8080))]
+        )
+      }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Container api on Pod api-abc\n  port 8080\n")
+    expect(stdout).to include(
+      "declared containerPort is configuration, not proof a process is listening\n"
+    )
     expect(stderr).to eq("")
   end
 
