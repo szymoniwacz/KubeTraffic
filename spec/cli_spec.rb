@@ -11,6 +11,12 @@ RSpec.describe KubeTraffic::CLI do
     [status, stdout.string, stderr.string]
   end
 
+  def stub_cluster(client: nil)
+    fake = client || instance_double(KubeTraffic::Kubernetes::Client, verify_connection!: true)
+    allow(KubeTraffic::Kubernetes::Client).to receive(:connect).and_return(fake)
+    fake
+  end
+
   it "prints the version for --version" do
     status, stdout, stderr = run("--version")
 
@@ -44,6 +50,8 @@ RSpec.describe KubeTraffic::CLI do
   end
 
   it "traces an https URL" do
+    stub_cluster
+
     status, stdout, stderr = run("trace", "https://api.example.com/users")
 
     expect(status).to eq(0)
@@ -52,11 +60,63 @@ RSpec.describe KubeTraffic::CLI do
   end
 
   it "traces a host and path without a scheme" do
+    stub_cluster
+
     status, stdout, stderr = run("trace", "api.example.com/users")
 
     expect(status).to eq(0)
     expect(stdout).to eq("Tracing api.example.com/users\n")
     expect(stderr).to eq("")
+  end
+
+  it "connects using an optional kubernetes context" do
+    client = stub_cluster
+    expect(KubeTraffic::Kubernetes::Client).to receive(:connect)
+      .with(context: "staging")
+      .and_return(client)
+
+    status, stdout, stderr = run("--context", "staging", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to eq("Tracing api.example.com/users\n")
+    expect(stderr).to eq("")
+  end
+
+  it "reports kubeconfig errors from the kubernetes client" do
+    allow(KubeTraffic::Kubernetes::Client).to receive(:connect)
+      .and_raise(KubeTraffic::Kubernetes::ConfigError, "kubeconfig not found: /tmp/missing")
+
+    status, stdout, stderr = run("trace", "api.example.com/users")
+
+    expect(status).to eq(1)
+    expect(stdout).to eq("")
+    expect(stderr).to include("kubeconfig not found: /tmp/missing")
+  end
+
+  it "reports kubernetes API connection errors" do
+    client = instance_double(KubeTraffic::Kubernetes::Client)
+    allow(client).to receive(:verify_connection!)
+      .and_raise(KubeTraffic::Kubernetes::ConnectionError, "unable to connect to the Kubernetes API: connection refused")
+    stub_cluster(client: client)
+
+    status, stdout, stderr = run("trace", "api.example.com/users")
+
+    expect(status).to eq(1)
+    expect(stdout).to eq("")
+    expect(stderr).to include("unable to connect to the Kubernetes API")
+  end
+
+  it "reports kubernetes authorization errors" do
+    client = instance_double(KubeTraffic::Kubernetes::Client)
+    allow(client).to receive(:verify_connection!)
+      .and_raise(KubeTraffic::Kubernetes::AuthorizationError, "not authorized to access the Kubernetes API: forbidden")
+    stub_cluster(client: client)
+
+    status, stdout, stderr = run("trace", "api.example.com/users")
+
+    expect(status).to eq(1)
+    expect(stdout).to eq("")
+    expect(stderr).to include("not authorized to access the Kubernetes API")
   end
 
   it "rejects an invalid trace target" do

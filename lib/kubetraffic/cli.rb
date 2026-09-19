@@ -2,6 +2,7 @@
 
 require "optparse"
 require_relative "target_parser"
+require_relative "kubernetes"
 
 module KubeTraffic
   class CLI
@@ -54,11 +55,16 @@ module KubeTraffic
       end
 
       target = TargetParser.parse(raw)
+      connect_to_cluster
       @stdout.puts "Tracing #{target}"
       0
-    rescue TargetParser::Error => e
+    rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
       1
+    end
+
+    def connect_to_cluster
+      Kubernetes::Client.connect(context: @options[:context]).verify_connection!
     end
 
     def usage(status)
@@ -71,6 +77,9 @@ module KubeTraffic
         opts.banner = "Usage: kubetraffic [options] [COMMAND]"
         opts.on("-v", "--version", "Print version") do
           @options[:version] = true
+        end
+        opts.on("--context CONTEXT", "Kubernetes context") do |context|
+          @options[:context] = context
         end
       end
     end
