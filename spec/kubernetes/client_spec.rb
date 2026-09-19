@@ -480,11 +480,25 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
         name: "api",
         namespace: "apps",
         ports: [
-          KubeTraffic::Kubernetes::ServicePort.new(name: "http", port: 80),
-          KubeTraffic::Kubernetes::ServicePort.new(name: "https", port: 443)
+          KubeTraffic::Kubernetes::ServicePort.new(name: "http", port: 80, target_port_number: 80),
+          KubeTraffic::Kubernetes::ServicePort.new(name: "https", port: 443, target_port_number: 443)
         ]
       )
     )
+  end
+
+  it "maps numeric and named Service targetPorts" do
+    numeric = fetched_service(
+      spec: { "ports" => [{ "name" => "http", "port" => 80, "targetPort" => 8080 }] }
+    )
+    named = fetched_service(
+      spec: { "ports" => [{ "name" => "http", "port" => 80, "targetPort" => "http" }] }
+    )
+
+    expect(numeric.ports.first.target_port_number).to eq(8080)
+    expect(numeric.ports.first.target_port_name).to be_nil
+    expect(named.ports.first.target_port_number).to be_nil
+    expect(named.ports.first.target_port_name).to eq("http")
   end
 
   it "drops Service ports that have no numeric port" do
@@ -499,7 +513,7 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     )
 
     expect(service.ports).to eq(
-      [KubeTraffic::Kubernetes::ServicePort.new(name: nil, port: 9090)]
+      [KubeTraffic::Kubernetes::ServicePort.new(name: nil, port: 9090, target_port_number: 9090)]
     )
   end
 
@@ -665,8 +679,48 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
         namespace: "apps",
         ip: "10.1.2.3",
         phase: "Running",
-        ready: true
+        ready: true,
+        containers: []
       )
+    )
+  end
+
+  it "maps Pod container ports used for named targetPort resolution" do
+    api = double("api")
+    allow(api).to receive(:get_pod).with("api-abc", "apps").and_return(
+      Kubeclient::Resource.new(
+        "metadata" => { "name" => "api-abc", "namespace" => "apps" },
+        "spec" => {
+          "containers" => [
+            {
+              "name" => "api",
+              "ports" => [
+                { "name" => "http", "containerPort" => 8080 },
+                { "containerPort" => "not-a-port" }
+              ]
+            }
+          ]
+        },
+        "status" => { "podIP" => "10.1.2.3", "phase" => "Running" }
+      )
+    )
+
+    pod = described_class.new(
+      api: api,
+      networking_api: double("networking_api"),
+      discovery_api: double("discovery_api"),
+      namespace: "apps"
+    ).get_pod("api-abc")
+
+    expect(pod.containers).to eq(
+      [
+        KubeTraffic::Kubernetes::Container.new(
+          name: "api",
+          ports: [
+            KubeTraffic::Kubernetes::ContainerPort.new(name: "http", container_port: 8080)
+          ]
+        )
+      ]
     )
   end
 

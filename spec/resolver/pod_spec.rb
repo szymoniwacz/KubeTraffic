@@ -15,7 +15,8 @@ RSpec.describe KubeTraffic::Resolver::Pod do
       namespace: namespace,
       ip: ip,
       phase: phase,
-      ready: ready
+      ready: ready,
+      containers: []
     )
   end
 

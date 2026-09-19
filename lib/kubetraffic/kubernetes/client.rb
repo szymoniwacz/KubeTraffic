@@ -186,8 +186,8 @@ module KubeTraffic
       end
 
       # Core v1 Service mapping keeps identity and spec.ports needed to
-      # match an Ingress backend. targetPort is left unmapped until that
-      # resolution exists.
+      # match an Ingress backend and resolve targetPort. An omitted
+      # targetPort uses the Service port number, matching Kubernetes.
       def map_service(resource)
         metadata = resource.metadata
         Service.new(
@@ -201,9 +201,15 @@ module KubeTraffic
         number = integer_port(port.port)
         return nil if number.nil?
 
+        target_number = integer_port(port.targetPort)
+        target_name = target_number.nil? ? present(port.targetPort) : nil
+        target_number = number if target_number.nil? && target_name.nil?
+
         ServicePort.new(
           name: present(port.name),
-          port: number
+          port: number,
+          target_port_number: target_number,
+          target_port_name: target_name
         )
       end
 
@@ -247,7 +253,28 @@ module KubeTraffic
           namespace: present(metadata.namespace) || namespace,
           ip: present(status&.podIP),
           phase: present(status&.phase),
-          ready: pod_ready?(status)
+          ready: pod_ready?(status),
+          containers: Array(resource.spec&.containers).filter_map { |container| map_container(container) }
+        )
+      end
+
+      def map_container(container)
+        name = present(container.name)
+        return nil if name.nil?
+
+        Container.new(
+          name: name,
+          ports: Array(container.ports).filter_map { |port| map_container_port(port) }
+        )
+      end
+
+      def map_container_port(port)
+        number = integer_port(port.containerPort)
+        return nil if number.nil?
+
+        ContainerPort.new(
+          name: present(port.name),
+          container_port: number
         )
       end
 
