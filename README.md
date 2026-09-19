@@ -16,7 +16,10 @@ retrieved. Named `targetPort` values are resolved per usable Pod. Different
 pods may map the same name to different numbers. Unresolved named ports are
 reported instead of guessed. The trace then shows the matching container
 `containerPort` and states that this declaration does not prove a process is
-listening.
+listening. Failures are recorded as structured findings with codes such as
+`ingress_not_found`, `service_not_found`, `service_port_not_found`,
+`service_no_endpoints`, `endpoint_not_ready`, `pod_not_found`, and
+`target_port_unresolved`.
 
 ```text
 $ bin/kubetraffic --version
