@@ -3,6 +3,7 @@
 require "optparse"
 require_relative "target_parser"
 require_relative "kubernetes"
+require_relative "resolver"
 
 module KubeTraffic
   class CLI
@@ -57,24 +58,38 @@ module KubeTraffic
       target = TargetParser.parse(raw)
       client = connect_to_cluster
       ingresses = client.list_ingresses
+      match = Resolver::Ingress.match(ingresses, target)
       @stdout.puts "Tracing #{target} in namespace #{client.namespace}"
-      print_ingress_candidates(ingresses, client.namespace)
+      print_ingress_match(match, ingresses, target, client.namespace)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
       1
     end
 
-    def print_ingress_candidates(ingresses, namespace)
+    def print_ingress_match(match, ingresses, target, namespace)
       if ingresses.empty?
         @stdout.puts "No Ingress resources in namespace #{namespace}"
         return
       end
 
-      @stdout.puts "Ingress candidates:"
-      ingresses.each do |ingress|
-        @stdout.puts "  #{ingress.name}"
+      if match.nil?
+        @stdout.puts "No Ingress rule matches #{target} in namespace #{namespace}"
+        return
       end
+
+      @stdout.puts "Matched Ingress #{match.ingress.name}"
+      @stdout.puts "  host #{format_host(match.rule.host)}"
+      @stdout.puts "  path #{match.path.path}"
+      @stdout.puts "  pathType #{format_path_type(match.path.path_type)}"
+    end
+
+    def format_host(host)
+      host.nil? || host.empty? ? "(any)" : host
+    end
+
+    def format_path_type(path_type)
+      path_type.nil? || path_type.empty? ? "(unset)" : path_type
     end
 
     def connect_to_cluster
