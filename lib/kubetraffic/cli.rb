@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "optparse"
+require_relative "target_parser"
 
 module KubeTraffic
   class CLI
@@ -16,26 +17,58 @@ module KubeTraffic
     end
 
     def run
-      parser.parse!(@argv.dup)
+      args = parser.parse!(@argv.dup)
 
       if @options[:version]
         @stdout.puts "KubeTraffic #{VERSION}"
         return 0
       end
 
-      @stderr.puts parser
-      1
+      command = args.shift
+      case command
+      when "trace"
+        trace(args)
+      when nil
+        usage(1)
+      else
+        @stderr.puts "unknown command: #{command}"
+        usage(1)
+      end
     rescue OptionParser::ParseError => e
       @stderr.puts e.message
-      @stderr.puts parser
-      1
+      usage(1)
     end
 
     private
 
+    def trace(args)
+      raw = args.shift
+      if raw.nil? || raw.empty?
+        @stderr.puts "missing target"
+        return usage(1)
+      end
+
+      if args.any?
+        @stderr.puts "unexpected arguments: #{args.join(" ")}"
+        return usage(1)
+      end
+
+      target = TargetParser.parse(raw)
+      @stdout.puts "Tracing #{target}"
+      0
+    rescue TargetParser::Error => e
+      @stderr.puts e.message
+      1
+    end
+
+    def usage(status)
+      @stderr.puts parser
+      status
+    end
+
     def parser
       @parser ||= OptionParser.new do |opts|
-        opts.banner = "Usage: kubetraffic [options]"
+        opts.banner = "Usage: kubetraffic [options] [COMMAND]"
         opts.on("-v", "--version", "Print version") do
           @options[:version] = true
         end
