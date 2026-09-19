@@ -219,7 +219,7 @@ RSpec.describe KubeTraffic::Resolver::Ingress do
   end
 
   describe "competing rules" do
-    it "prefers an exact host over a wildcard host" do
+    it "prefers the longest matching path even when it is on a wildcard host" do
       selected = match(
         [
           ingress("wildcard", rule("*.example.com", path("/users", "Prefix"))),
@@ -229,10 +229,11 @@ RSpec.describe KubeTraffic::Resolver::Ingress do
         "/users"
       )
 
-      expect(selected.ingress.name).to eq("exact")
+      expect(selected.ingress.name).to eq("wildcard")
+      expect(selected.path.path).to eq("/users")
     end
 
-    it "prefers an exact host over a catch-all host" do
+    it "prefers the longest matching path even when it is on a catch-all host" do
       selected = match(
         [
           ingress("any", rule(nil, path("/users", "Prefix"))),
@@ -242,20 +243,8 @@ RSpec.describe KubeTraffic::Resolver::Ingress do
         "/users"
       )
 
-      expect(selected.ingress.name).to eq("exact")
-    end
-
-    it "prefers a wildcard host over a catch-all host" do
-      selected = match(
-        [
-          ingress("any", rule(nil, path("/", "Prefix"))),
-          ingress("wildcard", rule("*.example.com", path("/", "Prefix")))
-        ],
-        "api.example.com",
-        "/"
-      )
-
-      expect(selected.ingress.name).to eq("wildcard")
+      expect(selected.ingress.name).to eq("any")
+      expect(selected.path.path).to eq("/users")
     end
 
     it "prefers the longest matching Prefix on the same host" do
@@ -311,11 +300,24 @@ RSpec.describe KubeTraffic::Resolver::Ingress do
       expect(selected.path.path).to eq("/users")
     end
 
-    it "breaks remaining ties by Ingress name" do
+    it "breaks remaining ties by Ingress name as a KubeTraffic fallback" do
       selected = match(
         [
           ingress("zeta", rule("api.example.com", path("/", "Prefix"))),
           ingress("alpha", rule("api.example.com", path("/", "Prefix")))
+        ],
+        "api.example.com",
+        "/"
+      )
+
+      expect(selected.ingress.name).to eq("alpha")
+    end
+
+    it "does not rank exact hosts over wildcards when path and pathType tie" do
+      selected = match(
+        [
+          ingress("zeta", rule("api.example.com", path("/", "Prefix"))),
+          ingress("alpha", rule("*.example.com", path("/", "Prefix")))
         ],
         "api.example.com",
         "/"

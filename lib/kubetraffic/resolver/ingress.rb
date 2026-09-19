@@ -13,10 +13,6 @@ module KubeTraffic
         "ImplementationSpecific" => 0
       }.freeze
 
-      HOST_EXACT = 2
-      HOST_WILDCARD = 1
-      HOST_CATCH_ALL = 0
-
       def self.match(ingresses, target)
         new(ingresses).match(target)
       end
@@ -92,22 +88,20 @@ module KubeTraffic
         path.to_s.split("/").reject(&:empty?)
       end
 
+      # Kubernetes uses the longest matching path among rules whose hosts
+      # match. Remaining ties are unspecified; KubeTraffic then prefers
+      # Exact over Prefix and finally Ingress name, host, and path. That
+      # last step is a deterministic fallback, not Kubernetes routing
+      # semantics, and does not rank exact hosts over wildcards or
+      # catch-alls.
       def ranking(candidate)
         [
-          -host_rank(candidate.rule.host),
           -candidate.path.path.length,
           -path_type_rank(candidate.path.path_type),
           candidate.ingress.name.to_s,
           candidate.rule.host.to_s,
           candidate.path.path.to_s
         ]
-      end
-
-      def host_rank(host)
-        return HOST_CATCH_ALL if host.nil? || host.empty?
-        return HOST_WILDCARD if wildcard_host?(host.downcase)
-
-        HOST_EXACT
       end
 
       def path_type_rank(path_type)

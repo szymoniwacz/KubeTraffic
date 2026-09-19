@@ -35,4 +35,6 @@ kubeconfig context namespace, then `default`. Ingress listing and matching use
 this namespace. Host matching follows Kubernetes Ingress rules, including
 single-label wildcards and catch-all hosts. Path matching supports `Exact` and
 `Prefix`. `ImplementationSpecific` and missing `pathType` match only the exact
-path.
+path. Among matching rules, the longest path wins, then `Exact` over `Prefix`.
+Any remaining tie is broken deterministically by Ingress name; that fallback is
+KubeTraffic-specific, not Kubernetes routing semantics.
