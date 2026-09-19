@@ -59,8 +59,10 @@ module KubeTraffic
       client = connect_to_cluster
       ingresses = client.list_ingresses
       match = Resolver::Ingress.match(ingresses, target)
+      service_result = resolve_service(match, client)
       @stdout.puts "Tracing #{target} in namespace #{client.namespace}"
       print_ingress_match(match, ingresses, target, client.namespace)
+      print_service_match(match, service_result, client.namespace)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
@@ -83,6 +85,47 @@ module KubeTraffic
       @stdout.puts "  path #{match.path.path}"
       @stdout.puts "  pathType #{format_path_type(match.path.path_type)}"
       @stdout.puts "  #{format_backend(match.backend)}"
+    end
+
+    def resolve_service(match, client)
+      backend = match&.backend
+      name = present(backend&.name)
+      return nil if name.nil?
+
+      Resolver::Service.resolve(client.get_service(name), backend)
+    end
+
+    def print_service_match(match, result, namespace)
+      backend = match&.backend
+      name = present(backend&.name)
+      return if name.nil? || result.nil?
+
+      if result.service.nil?
+        @stdout.puts "Service #{name} not found in namespace #{namespace}"
+        return
+      end
+
+      @stdout.puts "Service #{result.service.name}"
+      if result.port
+        @stdout.puts "  port #{format_service_port(result.port)}"
+      else
+        @stdout.puts "  #{unmatched_service_port(backend)}"
+      end
+    end
+
+    def format_service_port(port)
+      name = present(port.name)
+      name ? "#{port.port} name #{name}" : port.port.to_s
+    end
+
+    def unmatched_service_port(backend)
+      if !backend.port_number.nil?
+        "no port matches #{backend.port_number}"
+      elsif present(backend.port_name)
+        "no port matches name #{backend.port_name}"
+      else
+        "backend port cannot be interpreted"
+      end
     end
 
     def format_host(host)
