@@ -41,8 +41,23 @@ RSpec.describe KubeTraffic::Diagnostic::Analyzer do
     KubeTraffic::Kubernetes::Service.new(name: "api", namespace: "apps", ports: [service_port])
   end
 
-  def endpoint(*addresses, ready: true)
-    KubeTraffic::Kubernetes::Endpoint.new(addresses: addresses, ready: ready)
+  def endpoint(*addresses, ready: true, target_ref: nil)
+    KubeTraffic::Kubernetes::Endpoint.new(addresses: addresses, ready: ready, target_ref: target_ref)
+  end
+
+  def pod_ref(name = "api-abc")
+    KubeTraffic::Kubernetes::TargetRef.new(kind: "Pod", namespace: "apps", name: name)
+  end
+
+  def mapped_pod(name = "api-abc")
+    KubeTraffic::Kubernetes::Pod.new(
+      name: name,
+      namespace: "apps",
+      ip: "10.1.2.3",
+      phase: "Running",
+      ready: true,
+      containers: []
+    )
   end
 
   def slice(endpoints)
@@ -66,8 +81,18 @@ RSpec.describe KubeTraffic::Diagnostic::Analyzer do
     KubeTraffic::Resolver::Pod::Result.new(pods: found, missing: missing)
   end
 
-  def target_port(number: 8080, name: nil, resolved: true)
-    KubeTraffic::Resolver::TargetPort::Result.new(number: number, name: name, resolved: resolved)
+  def target_port(number: 8080, name: nil, resolved: true, mappings: [], unresolved_pods: [])
+    KubeTraffic::Resolver::TargetPort::Result.new(
+      name: name,
+      number: number,
+      resolved: resolved,
+      mappings: mappings,
+      unresolved_pods: unresolved_pods
+    )
+  end
+
+  def containers(matches: [], unmatched_pods: [])
+    KubeTraffic::Resolver::Container::Result.new(matches: matches, unmatched_pods: unmatched_pods)
   end
 
   def analyze(**overrides)
@@ -80,7 +105,8 @@ RSpec.describe KubeTraffic::Diagnostic::Analyzer do
         service: service_result,
         endpoints: endpoints,
         pods: pods,
-        target_port: target_port
+        target_port: target_port,
+        containers: containers
       }.merge(overrides)
     ).findings
   end
@@ -161,21 +187,66 @@ RSpec.describe KubeTraffic::Diagnostic::Analyzer do
   end
 
   it "reports pod_not_found for a missing targetRef Pod" do
-    ref = KubeTraffic::Kubernetes::TargetRef.new(kind: "Pod", namespace: "apps", name: "api-abc")
-    findings = analyze(pods: pods(missing: [ref]))
+    ref = pod_ref
+    findings = analyze(
+      endpoints: endpoints(items: [endpoint("10.1.2.3", target_ref: ref)]),
+      pods: pods(missing: [ref])
+    )
 
     expect(codes(findings)).to eq(["pod_not_found"])
     expect(findings.first.summary).to eq("Pod api-abc not found in namespace apps")
   end
 
-  it "reports target_port_unresolved for an unresolved named targetPort" do
-    findings = analyze(target_port: target_port(number: nil, name: "http", resolved: false))
+  it "reports target_port_unresolved when a usable pod does not declare the named port" do
+    unresolved = mapped_pod("api-b")
+    findings = analyze(
+      endpoints: endpoints(items: [endpoint("10.1.2.3", target_ref: pod_ref("api-b"))]),
+      pods: pods(found: [unresolved]),
+      target_port: target_port(number: nil, name: "http", resolved: false, unresolved_pods: [unresolved])
+    )
 
     expect(codes(findings)).to eq(["target_port_unresolved"])
     expect(findings.first.summary).to eq("Named targetPort http unresolved")
   end
 
+  it "does not report target_port_unresolved when no usable pods were inspected" do
+    findings = analyze(
+      endpoints: endpoints(items: [endpoint("10.1.2.3")]),
+      target_port: target_port(number: nil, name: "http", resolved: true)
+    )
+
+    expect(codes(findings)).not_to include("target_port_unresolved")
+  end
+
+  it "warns when usable endpoints have no Pod targetRef" do
+    findings = analyze(endpoints: endpoints(items: [endpoint("10.1.2.3")]))
+
+    warning = findings.find { |finding| finding.code == "pod_target_ref_missing" }
+    expect(warning.severity).to eq(:warning)
+    expect(warning.summary).to eq("Usable endpoints have no Pod targetRef")
+    expect(codes(findings)).not_to include("target_port_unresolved")
+  end
+
+  it "warns when a numeric targetPort has no matching containerPort" do
+    unmatched = mapped_pod
+    findings = analyze(
+      endpoints: endpoints(items: [endpoint("10.1.2.3", target_ref: pod_ref)]),
+      pods: pods(found: [unmatched]),
+      containers: containers(unmatched_pods: [unmatched])
+    )
+
+    warning = findings.find { |finding| finding.code == "container_port_unmatched" }
+    expect(warning.severity).to eq(:warning)
+    expect(warning.summary).to eq("No declared containerPort matches 8080")
+    expect(findings.select { |finding| finding.severity == :error }).to eq([])
+  end
+
   it "emits no findings for a complete ready chain" do
-    expect(analyze).to eq([])
+    expect(
+      analyze(
+        endpoints: endpoints(items: [endpoint("10.1.2.3", target_ref: pod_ref)]),
+        pods: pods(found: [mapped_pod])
+      )
+    ).to eq([])
   end
 end

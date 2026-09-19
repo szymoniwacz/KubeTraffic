@@ -33,8 +33,9 @@ module KubeTraffic
         service = resolve_service(match)
         endpoints = resolve_endpoints(service)
         pods = resolve_pods(endpoints)
-        target_port = resolve_target_port(service, pods)
-        containers = Resolver::Container.resolve(pods&.pods, target_port)
+        usable_pods = Resolver::Pod.for_usable_endpoints(pods, endpoints)
+        target_port = resolve_target_port(service, usable_pods)
+        containers = Resolver::Container.resolve(usable_pods, target_port)
         findings = Diagnostic::Analyzer.new(
           target: target,
           namespace: @client.namespace,
@@ -43,7 +44,8 @@ module KubeTraffic
           service: service,
           endpoints: endpoints,
           pods: pods,
-          target_port: target_port
+          target_port: target_port,
+          containers: containers
         ).findings
 
         Result.new(
@@ -83,11 +85,11 @@ module KubeTraffic
         Resolver::Pod.resolve(endpoint_result.usable_endpoints, @client)
       end
 
-      def resolve_target_port(service_result, pod_result)
+      def resolve_target_port(service_result, usable_pods)
         port = service_result&.port
         return nil if port.nil?
 
-        Resolver::TargetPort.resolve(port, pod_result&.pods)
+        Resolver::TargetPort.resolve(port, usable_pods)
       end
 
       def present(value)

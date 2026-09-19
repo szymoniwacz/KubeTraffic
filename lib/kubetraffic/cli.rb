@@ -66,6 +66,7 @@ module KubeTraffic
       print_pods(result)
       print_target_port(result)
       print_containers(result)
+      print_warnings(result)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
@@ -237,6 +238,19 @@ module KubeTraffic
         end
       end
       @stdout.puts Resolver::Container::LISTENING_LIMITATION
+    end
+
+    def print_warnings(result)
+      warnings = result.findings.select { |finding| finding.severity == :warning }
+      return if warnings.empty?
+
+      @stdout.puts "Warnings:"
+      warnings.each do |warning|
+        @stdout.puts "  #{warning.summary}"
+      end
+      if warnings.any? { |warning| warning.code == "container_port_unmatched" }
+        @stdout.puts "  #{Resolver::Container::LISTENING_LIMITATION}"
+      end
     end
 
     def format_container_port(port)

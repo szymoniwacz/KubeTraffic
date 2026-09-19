@@ -5,7 +5,7 @@ require_relative "finding"
 module KubeTraffic
   module Diagnostic
     class Analyzer
-      def initialize(target:, namespace:, ingresses:, match:, service:, endpoints:, pods:, target_port:)
+      def initialize(target:, namespace:, ingresses:, match:, service:, endpoints:, pods:, target_port:, containers: nil)
         @target = target
         @namespace = namespace
         @ingresses = Array(ingresses)
@@ -14,6 +14,7 @@ module KubeTraffic
         @endpoints = endpoints
         @pods = pods
         @target_port = target_port
+        @containers = containers
       end
 
       def findings
@@ -22,7 +23,9 @@ module KubeTraffic
           *service_findings,
           *endpoint_findings,
           *pod_findings,
-          *target_port_findings
+          *target_port_findings,
+          *pod_target_ref_findings,
+          *container_findings
         ]
       end
 
@@ -127,12 +130,45 @@ module KubeTraffic
       def target_port_findings
         name = present(@target_port&.name)
         return [] if name.nil? || @target_port.resolved
+        return [] if Array(@target_port.unresolved_pods).empty?
 
         [finding(
           :error,
           "target_port_unresolved",
           "Named targetPort #{name} unresolved",
-          target_port: name
+          target_port: name,
+          pods: Array(@target_port.unresolved_pods).map(&:name)
+        )]
+      end
+
+      def pod_target_ref_findings
+        return [] if @endpoints.nil?
+
+        usable = @endpoints.usable_endpoints
+        return [] unless usable.any?
+        return [] if usable.any? { |endpoint| endpoint.target_ref&.kind == "Pod" }
+
+        [finding(
+          :warning,
+          "pod_target_ref_missing",
+          "Usable endpoints have no Pod targetRef",
+          endpoints: usable.size
+        )]
+      end
+
+      def container_findings
+        return [] if @containers.nil? || @target_port.nil? || !@target_port.resolved
+        return [] unless present(@target_port.name).nil?
+
+        unmatched = Array(@containers.unmatched_pods)
+        return [] if unmatched.empty? || @target_port.number.nil?
+
+        [finding(
+          :warning,
+          "container_port_unmatched",
+          "No declared containerPort matches #{@target_port.number}",
+          target_port: @target_port.number,
+          pods: unmatched.map(&:name)
         )]
       end
 
