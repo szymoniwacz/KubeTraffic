@@ -19,6 +19,7 @@ module KubeTraffic
         render_pods(result, lines)
         render_target_port(result, lines)
         render_containers(result, lines)
+        render_warnings(result, lines)
         lines << result_line(result)
         "#{compact_blank_lines(lines).join("\n")}\n"
       end
@@ -112,10 +113,6 @@ module KubeTraffic
         return if endpoints.nil? || pods.nil?
 
         missing = findings_for(result, "pod_not_found")
-        if endpoints.endpoints.any? && pods.pods.empty? && pods.missing.empty?
-          step(lines, false, "Pod", "No Pod target references")
-          return
-        end
 
         pods.pods.each do |pod|
           step(
@@ -147,10 +144,22 @@ module KubeTraffic
         return if name.nil?
 
         unresolved = finding_for(result, "target_port_unresolved")
+        evidence = []
         if target&.resolved
-          step(lines, true, "Target port", "named #{name} resolved to #{target.number}")
+          evidence << "named #{name}"
+          Array(target.mappings).each do |mapping|
+            evidence << "#{mapping.pod.name} #{mapping.number}"
+          end
+          step(lines, true, "Target port", *evidence)
         else
-          step(lines, false, "Target port", unresolved ? unresolved.summary : "Named targetPort #{name} unresolved")
+          evidence << (unresolved ? unresolved.summary : "Named targetPort #{name} unresolved")
+          Array(target&.mappings).each do |mapping|
+            evidence << "#{mapping.pod.name} #{mapping.number}"
+          end
+          Array(target&.unresolved_pods).each do |pod|
+            evidence << "#{pod.name} (not declared)"
+          end
+          step(lines, false, "Target port", *evidence)
         end
       end
 
@@ -159,20 +168,9 @@ module KubeTraffic
 
         target = result.target_port
         return unless target&.resolved
+        return if result.containers.nil? || result.containers.matches.empty?
 
-        containers = result.containers
-        if containers.matches.empty?
-          step(
-            lines,
-            false,
-            "Container/port",
-            "No declared containerPort matches #{target.number}",
-            Resolver::Container::LISTENING_LIMITATION
-          )
-          return
-        end
-
-        containers.matches.each do |match|
+        result.containers.matches.each do |match|
           step(
             lines,
             true,
@@ -181,6 +179,20 @@ module KubeTraffic
             Resolver::Container::LISTENING_LIMITATION
           )
         end
+      end
+
+      def render_warnings(result, lines)
+        warnings = result.findings.select { |finding| finding.severity == :warning }
+        return if warnings.empty?
+
+        lines << "Warnings:"
+        warnings.each do |warning|
+          lines << "     #{warning.summary}"
+        end
+        if warnings.any? { |warning| warning.code == "container_port_unmatched" }
+          lines << "     #{Resolver::Container::LISTENING_LIMITATION}"
+        end
+        lines << nil
       end
 
       def compact_blank_lines(lines)

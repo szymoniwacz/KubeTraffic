@@ -321,7 +321,9 @@ RSpec.describe KubeTraffic::CLI do
       "       10.1.2.4 ready=false\n" \
       "       10.1.2.3 ready=true\n"
     )
-    expect(stdout).to include("No Pod target references\n")
+    expect(stdout).not_to include("[x] Pod")
+    expect(stdout).to include("Warnings:\n     Usable endpoints have no Pod targetRef\n")
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -384,7 +386,9 @@ RSpec.describe KubeTraffic::CLI do
     expect(stdout).to include("     10.1.2.4 ready=false\n")
     expect(stdout).to include("     ready 1\n     not-ready 1\n     unknown readiness 0\n")
     expect(stdout).not_to include("No usable endpoints")
-    expect(stdout).to include("No Pod target references\n")
+    expect(stdout).not_to include("[x] Pod")
+    expect(stdout).to include("Warnings:\n     Usable endpoints have no Pod targetRef\n")
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -404,9 +408,10 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("  ready 0\n  not-ready 2\n  unknown readiness 0\n")
+    expect(stdout).to include("     ready 0\n     not-ready 2\n     unknown readiness 0\n")
     expect(stdout).to include("No usable endpoints for Service api\n")
-    expect(stdout).to include("No Pod target references\n")
+    expect(stdout).to include("Result: failed (endpoint_not_ready)\n")
+    expect(stdout).not_to include("No Pod target references")
     expect(stderr).to eq("")
   end
 
@@ -428,7 +433,9 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to include("     ready 0\n     not-ready 1\n     unknown readiness 1\n")
     expect(stdout).not_to include("No usable endpoints")
-    expect(stdout).to include("No Pod target references\n")
+    expect(stdout).not_to include("[x] Pod")
+    expect(stdout).to include("Warnings:\n     Usable endpoints have no Pod targetRef\n")
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -568,10 +575,12 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("[ok] Target port\n     8080\n")
-    expect(stdout).to include("No declared containerPort matches 8080\n")
+    expect(stdout).not_to include("[x]")
+    expect(stdout).to include("Warnings:\n     No declared containerPort matches 8080\n")
     expect(stdout).to include(
       "declared containerPort is configuration, not proof a process is listening\n"
     )
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -638,10 +647,11 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Target port named http\n  api-a 8080\n  api-b 9090\n")
+    expect(stdout).to include("[ok] Target port\n     named http\n     api-a 8080\n     api-b 9090\n")
     expect(stdout).not_to include("api-c 7070")
-    expect(stdout).to include("Container api on Pod api-a\n  port 8080 name http\n")
-    expect(stdout).to include("Container api on Pod api-b\n  port 9090 name http\n")
+    expect(stdout).to include("[ok] Container api on Pod api-a\n     port 8080 name http\n")
+    expect(stdout).to include("[ok] Container api on Pod api-b\n     port 9090 name http\n")
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -666,7 +676,12 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Named targetPort http unresolved\n  api-abc (not declared)\n")
+    expect(stdout).to include(
+      "[x] Target port\n" \
+      "     Named targetPort http unresolved\n" \
+      "     api-abc (not declared)\n"
+    )
+    expect(stdout).to include("Result: failed (target_port_unresolved)\n")
     expect(stdout).not_to include("Container ")
     expect(stdout).not_to include("declared containerPort")
     expect(stderr).to eq("")

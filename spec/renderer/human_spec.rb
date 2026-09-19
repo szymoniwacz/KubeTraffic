@@ -141,4 +141,114 @@ RSpec.describe KubeTraffic::Renderer::Human do
     expect(output).to include("Result: failed (ingress_not_found)\n")
     expect(output).not_to include("[ok]")
   end
+
+  it "does not mark unmatched containerPort as a failed hop" do
+    warning = KubeTraffic::Diagnostic::Finding.new(
+      severity: :warning,
+      code: "container_port_unmatched",
+      summary: "No declared containerPort matches 8080",
+      evidence: { target_port: 8080, pods: ["api-abc"] }
+    )
+    output = described_class.new.render(
+      trace(
+        containers: KubeTraffic::Resolver::Container::Result.new(matches: [], unmatched_pods: [mapped_pod]),
+        findings: [warning]
+      )
+    )
+
+    expect(output).to include("Warnings:\n     No declared containerPort matches 8080\n")
+    expect(output).to include("Result: configuration chain complete\n")
+    expect(output).not_to include("[x]")
+  end
+
+  it "does not mark missing Pod targetRef as a failed hop" do
+    warning = KubeTraffic::Diagnostic::Finding.new(
+      severity: :warning,
+      code: "pod_target_ref_missing",
+      summary: "Usable endpoints have no Pod targetRef",
+      evidence: { endpoints: 1 }
+    )
+    output = described_class.new.render(
+      trace(
+        pods: KubeTraffic::Resolver::Pod::Result.new(pods: [], missing: []),
+        findings: [warning]
+      )
+    )
+
+    expect(output).not_to include("[x] Pod")
+    expect(output).to include("Warnings:\n     Usable endpoints have no Pod targetRef\n")
+    expect(output).to include("Result: configuration chain complete\n")
+  end
+
+  it "renders per-pod named targetPort mappings without collapsing them" do
+    first = mapped_pod
+    second = KubeTraffic::Kubernetes::Pod.new(
+      name: "api-b",
+      namespace: "apps",
+      ip: "10.1.2.4",
+      phase: "Running",
+      ready: true,
+      containers: [
+        KubeTraffic::Kubernetes::Container.new(
+          name: "api",
+          ports: [KubeTraffic::Kubernetes::ContainerPort.new(name: "http", container_port: 9090)]
+        )
+      ]
+    )
+    named = KubeTraffic::Resolver::TargetPort::Result.new(
+      name: "http",
+      number: nil,
+      resolved: true,
+      mappings: [
+        KubeTraffic::Resolver::TargetPort::Mapping.new(pod: first, number: 8080),
+        KubeTraffic::Resolver::TargetPort::Mapping.new(pod: second, number: 9090)
+      ]
+    )
+    named_port = KubeTraffic::Kubernetes::ServicePort.new(
+      name: "http",
+      port: 80,
+      target_port_name: "http"
+    )
+    output = described_class.new.render(
+      trace(
+        service: KubeTraffic::Resolver::Service::Result.new(service: mapped_service, port: named_port),
+        target_port: named,
+        containers: KubeTraffic::Resolver::Container.resolve([first, second], named)
+      )
+    )
+
+    expect(output).to include("[ok] Target port\n     named http\n     api-abc 8080\n     api-b 9090\n")
+    expect(output).to include("Result: configuration chain complete\n")
+    expect(output).not_to include("[x]")
+  end
+
+  it "fails the target port hop when a named port is unresolved" do
+    finding = KubeTraffic::Diagnostic::Finding.new(
+      severity: :error,
+      code: "target_port_unresolved",
+      summary: "Named targetPort http unresolved",
+      evidence: { target_port: "http" }
+    )
+    named_port = KubeTraffic::Kubernetes::ServicePort.new(
+      name: "http",
+      port: 80,
+      target_port_name: "http"
+    )
+    output = described_class.new.render(
+      trace(
+        service: KubeTraffic::Resolver::Service::Result.new(service: mapped_service, port: named_port),
+        target_port: KubeTraffic::Resolver::TargetPort::Result.new(
+          name: "http",
+          number: nil,
+          resolved: false,
+          unresolved_pods: [mapped_pod]
+        ),
+        containers: KubeTraffic::Resolver::Container::Result.new(matches: []),
+        findings: [finding]
+      )
+    )
+
+    expect(output).to include("[x] Target port\n     Named targetPort http unresolved\n     api-abc (not declared)\n")
+    expect(output).to include("Result: failed (target_port_unresolved)\n")
+  end
 end
