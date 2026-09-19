@@ -11,7 +11,7 @@ RSpec.describe KubeTraffic::CLI do
     [status, stdout.string, stderr.string]
   end
 
-  def stub_cluster(client: nil, namespace: "default", ingresses: [], service: nil, endpoint_slices: [])
+  def stub_cluster(client: nil, namespace: "default", ingresses: [], service: nil, endpoint_slices: [], pods: {})
     fake = client || instance_double(
       KubeTraffic::Kubernetes::Client,
       verify_connection!: true,
@@ -20,6 +20,11 @@ RSpec.describe KubeTraffic::CLI do
       get_service: service,
       list_endpoint_slices: endpoint_slices
     )
+    unless client
+      allow(fake).to receive(:get_pod) do |name, namespace: nil|
+        pods.fetch([namespace, name]) { pods[name] }
+      end
+    end
     allow(KubeTraffic::Kubernetes::Client).to receive(:connect).and_return(fake)
     fake
   end
@@ -63,8 +68,22 @@ RSpec.describe KubeTraffic::CLI do
     KubeTraffic::Kubernetes::Service.new(name: name, namespace: namespace, ports: ports)
   end
 
-  def endpoint(*addresses, ready: true)
-    KubeTraffic::Kubernetes::Endpoint.new(addresses: addresses, ready: ready)
+  def endpoint(*addresses, ready: true, target_ref: nil)
+    KubeTraffic::Kubernetes::Endpoint.new(addresses: addresses, ready: ready, target_ref: target_ref)
+  end
+
+  def target_ref(name, kind: "Pod", namespace: "apps")
+    KubeTraffic::Kubernetes::TargetRef.new(kind: kind, namespace: namespace, name: name)
+  end
+
+  def mapped_pod(name = "api-abc", namespace: "apps", ip: "10.1.2.3", phase: "Running", ready: true)
+    KubeTraffic::Kubernetes::Pod.new(
+      name: name,
+      namespace: namespace,
+      ip: ip,
+      phase: phase,
+      ready: ready
+    )
   end
 
   def endpoint_slice(name, service_name: "api", namespace: "apps", endpoints: [])
@@ -276,6 +295,7 @@ RSpec.describe KubeTraffic::CLI do
       "  10.1.2.4 ready=false\n" \
       "  10.1.2.3 ready=true\n"
     )
+    expect(stdout).to include("No Pod target references\n")
     expect(stderr).to eq("")
   end
 
@@ -338,6 +358,7 @@ RSpec.describe KubeTraffic::CLI do
     expect(stdout).to include("  10.1.2.4 ready=false\n")
     expect(stdout).to include("  ready 1\n  not-ready 1\n  unknown readiness 0\n")
     expect(stdout).not_to include("No usable endpoints")
+    expect(stdout).to include("No Pod target references\n")
     expect(stderr).to eq("")
   end
 
@@ -359,6 +380,7 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to include("  ready 0\n  not-ready 2\n  unknown readiness 0\n")
     expect(stdout).to include("No usable endpoints for Service api\n")
+    expect(stdout).to include("No Pod target references\n")
     expect(stderr).to eq("")
   end
 
@@ -380,6 +402,125 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to include("  ready 0\n  not-ready 1\n  unknown readiness 1\n")
     expect(stdout).not_to include("No usable endpoints")
+    expect(stdout).to include("No Pod target references\n")
+    expect(stderr).to eq("")
+  end
+
+  it "resolves Pods from EndpointSlice targetRef" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.3", target_ref: target_ref("api-abc"))]
+        )
+      ],
+      pods: { ["apps", "api-abc"] => mapped_pod }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include(
+      "Pod api-abc\n" \
+      "  IP 10.1.2.3\n" \
+      "  phase Running\n" \
+      "  ready=true\n"
+    )
+    expect(stderr).to eq("")
+  end
+
+  it "reports a missing Pod named by targetRef" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.3", target_ref: target_ref("api-abc"))]
+        )
+      ]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Pod api-abc not found in namespace apps\n")
+    expect(stderr).to eq("")
+  end
+
+  it "does not report a missing Pod referenced only by a not-ready endpoint" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [
+            endpoint("10.1.2.3", target_ref: target_ref("api-a")),
+            endpoint("10.1.2.4", ready: false, target_ref: target_ref("api-b"))
+          ]
+        )
+      ],
+      pods: { ["apps", "api-a"] => mapped_pod("api-a") }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Pod api-a\n")
+    expect(stdout).not_to include("Pod api-b not found")
+    expect(stderr).to eq("")
+  end
+
+  it "reports a missing Pod named by a ready=nil endpoint" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.5", ready: nil, target_ref: target_ref("api-abc"))]
+        )
+      ]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Pod api-abc not found in namespace apps\n")
+    expect(stderr).to eq("")
+  end
+
+  it "reports missing Pods only for usable endpoints" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [
+            endpoint("10.1.2.3", target_ref: target_ref("api-a")),
+            endpoint("10.1.2.4", ready: false, target_ref: target_ref("api-b")),
+            endpoint("10.1.2.5", ready: nil, target_ref: target_ref("api-c"))
+          ]
+        )
+      ],
+      pods: { ["apps", "api-a"] => mapped_pod("api-a") }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Pod api-a\n")
+    expect(stdout).not_to include("Pod api-b not found")
+    expect(stdout).to include("Pod api-c not found in namespace apps\n")
     expect(stderr).to eq("")
   end
 
@@ -549,6 +690,31 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(1)
     expect(stdout).to eq("")
     expect(stderr).to include("Kubernetes API error: EndpointSlice is forbidden")
+  end
+
+  it "reports kubernetes API errors when fetching a Pod" do
+    client = instance_double(
+      KubeTraffic::Kubernetes::Client,
+      verify_connection!: true,
+      namespace: "apps",
+      list_ingresses: [matching_ingress],
+      get_service: mapped_service,
+      list_endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.3", target_ref: target_ref("api-abc"))]
+        )
+      ]
+    )
+    allow(client).to receive(:get_pod)
+      .and_raise(KubeTraffic::Kubernetes::ApiError, "Kubernetes API error: Pod is forbidden")
+    stub_cluster(client: client)
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(1)
+    expect(stdout).to eq("")
+    expect(stderr).to include("Kubernetes API error: Pod is forbidden")
   end
 
   it "rejects an invalid trace target" do

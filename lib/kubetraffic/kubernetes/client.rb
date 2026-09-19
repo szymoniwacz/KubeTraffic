@@ -4,6 +4,7 @@ require_relative "errors"
 require_relative "ingress"
 require_relative "service"
 require_relative "endpoint_slice"
+require_relative "pod"
 
 module KubeTraffic
   module Kubernetes
@@ -66,6 +67,21 @@ module KubeTraffic
             label_selector: "#{SERVICE_NAME_LABEL}=#{name}"
           )
           Array(resources).map { |resource| map_endpoint_slice(resource) }.sort_by(&:name)
+        end
+      end
+
+      def get_pod(name, namespace: nil)
+        pod_name = present(name)
+        return nil if pod_name.nil?
+
+        pod_namespace = present(namespace) || self.namespace
+
+        with_mapped_errors do
+          map_pod(@api.get_pod(pod_name, pod_namespace))
+        rescue Kubeclient::HttpError => e
+          return nil if not_found?(e)
+
+          raise
         end
       end
 
@@ -204,8 +220,43 @@ module KubeTraffic
       def map_endpoint(endpoint)
         Endpoint.new(
           addresses: Array(endpoint.addresses).filter_map { |address| present(address) }.sort,
-          ready: boolean_or_nil(endpoint.conditions&.ready)
+          ready: boolean_or_nil(endpoint.conditions&.ready),
+          target_ref: map_target_ref(endpoint.targetRef)
         )
+      end
+
+      def map_target_ref(ref)
+        return nil if ref.nil?
+
+        name = present(ref.name)
+        kind = present(ref.kind)
+        return nil if name.nil? || kind.nil?
+
+        TargetRef.new(
+          kind: kind,
+          namespace: present(ref.namespace),
+          name: name
+        )
+      end
+
+      def map_pod(resource)
+        metadata = resource.metadata
+        status = resource.status
+        Pod.new(
+          name: metadata.name,
+          namespace: present(metadata.namespace) || namespace,
+          ip: present(status&.podIP),
+          phase: present(status&.phase),
+          ready: pod_ready?(status)
+        )
+      end
+
+      def pod_ready?(status)
+        conditions = Array(status&.conditions)
+        ready = conditions.find { |condition| present(condition.type) == "Ready" }
+        return nil if ready.nil?
+
+        boolean_or_nil(ready.status)
       end
 
       def label_value(labels, key)

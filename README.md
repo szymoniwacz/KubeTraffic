@@ -10,7 +10,8 @@ Service to resolve the matching `spec.ports` entry, and lists EndpointSlices
 labeled for that Service. Ready, not-ready, and unknown endpoints are counted
 from retrieved `conditions.ready` values. `ready=true` and omitted/`nil` ready
 conditions are usable (Kubernetes treats nil as true); only `ready=false` is
-unusable. It does not yet resolve endpoints to Pods or `targetPort`.
+unusable. EndpointSlice `targetRef` values that name a Pod are fetched for
+name, IP, phase, and readiness. It does not yet resolve `targetPort`.
 
 ```text
 $ bin/kubetraffic --version
@@ -30,6 +31,10 @@ EndpointSlice api-abc
   ready 1
   not-ready 0
   unknown readiness 0
+Pod api-abc
+  IP 10.1.2.3
+  phase Running
+  ready=true
 
 $ bin/kubetraffic --context staging -n apps trace api.example.com/users
 Tracing api.example.com/users in namespace apps
@@ -45,6 +50,10 @@ EndpointSlice api-abc
   ready 1
   not-ready 0
   unknown readiness 0
+Pod api-abc
+  IP 10.1.2.3
+  phase Running
+  ready=true
 ```
 
 `trace` loads kubeconfig from `KUBECONFIG` or `~/.kube/config` and verifies that
@@ -69,4 +78,6 @@ reported without inventing a default port. EndpointSlices are selected with the
 slices with no endpoints are reported. Endpoint readiness is shown as retrieved
 and summarized as ready, not-ready, and unknown counts. Endpoints with
 `ready=true` or omitted/`nil` `conditions.ready` are usable; unknown counts are
-display-only. Only `ready=false` is unusable.
+display-only. Only `ready=false` is unusable. Pods are resolved only from
+EndpointSlice `targetRef` entries of kind `Pod`. Missing Pods and missing
+target references are reported without matching endpoints to Pods by IP.
