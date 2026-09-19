@@ -41,6 +41,30 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     )
   end
 
+  def listed_path(spec)
+    networking_api = double("networking_api")
+    allow(networking_api).to receive(:get_ingresses).and_return(
+      [
+        ingress_resource(
+          name: "api",
+          spec: {
+            "rules" => [
+              {
+                "host" => "api.example.com",
+                "http" => { "paths" => [spec] }
+              }
+            ]
+          }
+        )
+      ]
+    )
+
+    described_class.new(
+      api: instance_double(Kubeclient::Client),
+      networking_api: networking_api
+    ).list_ingresses.first.rules.first.paths.first
+  end
+
   def client_options
     hash_including(
       ssl_options: hash_including(:verify_ssl),
@@ -250,7 +274,16 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
                 "host" => "web.example.com",
                 "http" => {
                   "paths" => [
-                    { "path" => "/app", "pathType" => "Prefix" }
+                    {
+                      "path" => "/app",
+                      "pathType" => "Prefix",
+                      "backend" => {
+                        "service" => {
+                          "name" => "web",
+                          "port" => { "number" => 80 }
+                        }
+                      }
+                    }
                   ]
                 }
               }
@@ -274,7 +307,15 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
         KubeTraffic::Kubernetes::IngressRule.new(
           host: "web.example.com",
           paths: [
-            KubeTraffic::Kubernetes::IngressPath.new(path: "/app", path_type: "Prefix")
+            KubeTraffic::Kubernetes::IngressPath.new(
+              path: "/app",
+              path_type: "Prefix",
+              backend: KubeTraffic::Kubernetes::IngressServiceBackend.new(
+                name: "web",
+                port_number: 80,
+                port_name: nil
+              )
+            )
           ]
         )
       ]
@@ -305,6 +346,101 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     expect(ingress.rules.first.paths).to eq(
       [KubeTraffic::Kubernetes::IngressPath.new(path: "/", path_type: nil)]
     )
+  end
+
+  it "maps a numeric Ingress backend Service port" do
+    path = listed_path(
+      "path" => "/users",
+      "pathType" => "Prefix",
+      "backend" => {
+        "service" => {
+          "name" => "api",
+          "port" => { "number" => 8080 }
+        }
+      }
+    )
+
+    expect(path.backend).to eq(
+      KubeTraffic::Kubernetes::IngressServiceBackend.new(
+        name: "api",
+        port_number: 8080,
+        port_name: nil
+      )
+    )
+  end
+
+  it "maps a named Ingress backend Service port" do
+    path = listed_path(
+      "path" => "/users",
+      "pathType" => "Prefix",
+      "backend" => {
+        "service" => {
+          "name" => "api",
+          "port" => { "name" => "http" }
+        }
+      }
+    )
+
+    expect(path.backend).to eq(
+      KubeTraffic::Kubernetes::IngressServiceBackend.new(
+        name: "api",
+        port_number: nil,
+        port_name: "http"
+      )
+    )
+  end
+
+  it "does not invent a Service backend when it is missing or not a Service" do
+    missing = listed_path("path" => "/users", "pathType" => "Prefix")
+    resource = listed_path(
+      "path" => "/users",
+      "pathType" => "Prefix",
+      "backend" => {
+        "resource" => {
+          "apiGroup" => "example.com",
+          "kind" => "StorageBucket",
+          "name" => "assets"
+        }
+      }
+    )
+    blank_name = listed_path(
+      "path" => "/users",
+      "pathType" => "Prefix",
+      "backend" => {
+        "service" => {
+          "name" => " ",
+          "port" => { "number" => 80 }
+        }
+      }
+    )
+
+    expect(missing.backend).to be_nil
+    expect(resource.backend).to be_nil
+    expect(blank_name.backend).to be_nil
+  end
+
+  it "preserves a Service name when the backend port is missing or malformed" do
+    missing_port = listed_path(
+      "path" => "/users",
+      "pathType" => "Prefix",
+      "backend" => { "service" => { "name" => "api" } }
+    )
+    malformed_port = listed_path(
+      "path" => "/users",
+      "pathType" => "Prefix",
+      "backend" => {
+        "service" => {
+          "name" => "api",
+          "port" => { "number" => "http" }
+        }
+      }
+    )
+
+    expect(missing_port.backend.name).to eq("api")
+    expect(missing_port.backend.port_number).to be_nil
+    expect(missing_port.backend.port_name).to be_nil
+    expect(malformed_port.backend.port_number).to be_nil
+    expect(malformed_port.backend.port_name).to be_nil
   end
 
   it "maps Ingress list authorization failures" do

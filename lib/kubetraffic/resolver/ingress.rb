@@ -5,7 +5,11 @@ require_relative "../kubernetes/ingress"
 module KubeTraffic
   module Resolver
     class Ingress
-      Match = Data.define(:ingress, :rule, :path)
+      Match = Data.define(:ingress, :rule, :path) do
+        def backend
+          path.backend
+        end
+      end
 
       PATH_TYPE_RANK = {
         "Exact" => 2,

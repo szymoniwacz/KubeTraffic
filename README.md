@@ -4,8 +4,9 @@ Read-only CLI that traces how an HTTP request is routed through Kubernetes.
 
 This repository is in early development. The CLI currently reports its version,
 accepts a `trace` target, connects read-only to the current Kubernetes context,
-and matches the target host and path against Ingress rules in the selected
-namespace. It does not yet resolve the backend Service.
+matches the target host and path against Ingress rules in the selected
+namespace, and reports the referenced backend Service name and port. It does
+not yet fetch the Service object.
 
 ```text
 $ bin/kubetraffic --version
@@ -17,6 +18,7 @@ Matched Ingress api
   host api.example.com
   path /users
   pathType Prefix
+  service api:80
 
 $ bin/kubetraffic --context staging -n apps trace api.example.com/users
 Tracing api.example.com/users in namespace apps
@@ -24,6 +26,7 @@ Matched Ingress api
   host api.example.com
   path /users
   pathType Prefix
+  service api:80
 ```
 
 `trace` loads kubeconfig from `KUBECONFIG` or `~/.kube/config` and verifies that
@@ -37,4 +40,7 @@ single-label wildcards and catch-all hosts. Path matching supports `Exact` and
 `Prefix`. `ImplementationSpecific` and missing `pathType` match only the exact
 path. Among matching rules, the longest path wins, then `Exact` over `Prefix`.
 Any remaining tie is broken deterministically by Ingress name; that fallback is
-KubeTraffic-specific, not Kubernetes routing semantics.
+KubeTraffic-specific, not Kubernetes routing semantics. The matched path's
+`networking.k8s.io/v1` Service backend is shown as `service name:port`. Missing
+or non-Service backends, and unreadable ports, are reported instead of defaulting
+to a name or port 80.

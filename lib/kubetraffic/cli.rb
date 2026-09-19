@@ -82,6 +82,7 @@ module KubeTraffic
       @stdout.puts "  host #{format_host(match.rule.host)}"
       @stdout.puts "  path #{match.path.path}"
       @stdout.puts "  pathType #{format_path_type(match.path.path_type)}"
+      @stdout.puts "  #{format_backend(match.backend)}"
     end
 
     def format_host(host)
@@ -90,6 +91,28 @@ module KubeTraffic
 
     def format_path_type(path_type)
       path_type.nil? || path_type.empty? ? "(unset)" : path_type
+    end
+
+    def format_backend(backend)
+      name = present(backend&.name)
+      return "backend cannot be interpreted" if name.nil?
+
+      port = backend_port(backend)
+      if port
+        "service #{name}:#{port}"
+      else
+        "service #{name} (backend port cannot be interpreted)"
+      end
+    end
+
+    def backend_port(backend)
+      return backend.port_number unless backend.port_number.nil?
+
+      present(backend.port_name)
+    end
+
+    def present(value)
+      value unless value.nil? || value.to_s.strip.empty?
     end
 
     def connect_to_cluster

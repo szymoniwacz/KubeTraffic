@@ -1,8 +1,16 @@
 # frozen_string_literal: true
 
 RSpec.describe KubeTraffic::Resolver::Ingress do
-  def path(value, type)
-    KubeTraffic::Kubernetes::IngressPath.new(path: value, path_type: type)
+  def path(value, type, backend: nil)
+    KubeTraffic::Kubernetes::IngressPath.new(path: value, path_type: type, backend: backend)
+  end
+
+  def service_backend(name, port_number: nil, port_name: nil)
+    KubeTraffic::Kubernetes::IngressServiceBackend.new(
+      name: name,
+      port_number: port_number,
+      port_name: port_name
+    )
   end
 
   def rule(host, *paths)
@@ -324,6 +332,95 @@ RSpec.describe KubeTraffic::Resolver::Ingress do
       )
 
       expect(selected.ingress.name).to eq("alpha")
+    end
+  end
+
+  describe "backend Service reference" do
+    it "exposes the matched path's Service name" do
+      selected = match(
+        [
+          ingress(
+            "api",
+            rule(
+              "api.example.com",
+              path("/users", "Prefix", backend: service_backend("api", port_number: 80))
+            )
+          )
+        ],
+        "api.example.com",
+        "/users"
+      )
+
+      expect(selected.backend.name).to eq("api")
+    end
+
+    it "exposes a numeric backend port" do
+      selected = match(
+        [
+          ingress(
+            "api",
+            rule(
+              "api.example.com",
+              path("/users", "Prefix", backend: service_backend("api", port_number: 8080))
+            )
+          )
+        ],
+        "api.example.com",
+        "/users"
+      )
+
+      expect(selected.backend.port_number).to eq(8080)
+      expect(selected.backend.port_name).to be_nil
+    end
+
+    it "exposes a named backend port" do
+      selected = match(
+        [
+          ingress(
+            "api",
+            rule(
+              "api.example.com",
+              path("/users", "Prefix", backend: service_backend("api", port_name: "http"))
+            )
+          )
+        ],
+        "api.example.com",
+        "/users"
+      )
+
+      expect(selected.backend.name).to eq("api")
+      expect(selected.backend.port_name).to eq("http")
+      expect(selected.backend.port_number).to be_nil
+    end
+
+    it "exposes a missing backend as nil" do
+      selected = match(
+        [ingress("api", rule("api.example.com", path("/users", "Prefix")))],
+        "api.example.com",
+        "/users"
+      )
+
+      expect(selected.backend).to be_nil
+    end
+
+    it "keeps a Service name when the backend port cannot be interpreted" do
+      selected = match(
+        [
+          ingress(
+            "api",
+            rule(
+              "api.example.com",
+              path("/users", "Prefix", backend: service_backend("api"))
+            )
+          )
+        ],
+        "api.example.com",
+        "/users"
+      )
+
+      expect(selected.backend.name).to eq("api")
+      expect(selected.backend.port_number).to be_nil
+      expect(selected.backend.port_name).to be_nil
     end
   end
 
