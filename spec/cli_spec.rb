@@ -22,8 +22,23 @@ RSpec.describe KubeTraffic::CLI do
     fake
   end
 
-  def ingress(name, namespace: "default")
-    KubeTraffic::Kubernetes::Ingress.new(name: name, namespace: namespace, rules: [])
+  def ingress(name, namespace: "default", rules: [])
+    KubeTraffic::Kubernetes::Ingress.new(name: name, namespace: namespace, rules: rules)
+  end
+
+  def matching_ingress
+    ingress(
+      "api",
+      namespace: "apps",
+      rules: [
+        KubeTraffic::Kubernetes::IngressRule.new(
+          host: "api.example.com",
+          paths: [
+            KubeTraffic::Kubernetes::IngressPath.new(path: "/users", path_type: "Prefix")
+          ]
+        )
+      ]
+    )
   end
 
   it "prints the version for --version" do
@@ -84,10 +99,39 @@ RSpec.describe KubeTraffic::CLI do
     expect(stderr).to eq("")
   end
 
-  it "lists Ingress candidates from the selected namespace" do
+  it "prints the matching Ingress rule and path" do
+    stub_cluster(namespace: "apps", ingresses: [matching_ingress])
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to eq(
+      "Tracing api.example.com/users in namespace apps\n" \
+      "Matched Ingress api\n" \
+      "  host api.example.com\n" \
+      "  path /users\n" \
+      "  pathType Prefix\n"
+    )
+    expect(stderr).to eq("")
+  end
+
+  it "reports when Ingresses exist but no rule matches the target" do
     stub_cluster(
       namespace: "apps",
-      ingresses: [ingress("web", namespace: "apps"), ingress("api", namespace: "apps")]
+      ingresses: [
+        ingress(
+          "web",
+          namespace: "apps",
+          rules: [
+            KubeTraffic::Kubernetes::IngressRule.new(
+              host: "web.example.com",
+              paths: [
+                KubeTraffic::Kubernetes::IngressPath.new(path: "/", path_type: "Prefix")
+              ]
+            )
+          ]
+        )
+      ]
     )
 
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
@@ -95,9 +139,7 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to eq(
       "Tracing api.example.com/users in namespace apps\n" \
-      "Ingress candidates:\n" \
-      "  web\n" \
-      "  api\n"
+      "No Ingress rule matches api.example.com/users in namespace apps\n"
     )
     expect(stderr).to eq("")
   end
