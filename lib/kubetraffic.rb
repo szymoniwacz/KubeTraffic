@@ -7,6 +7,7 @@ require_relative "kubetraffic/kubernetes"
 require_relative "kubetraffic/resolver"
 require_relative "kubetraffic/diagnostic"
 require_relative "kubetraffic/trace"
+require_relative "kubetraffic/renderer"
 require_relative "kubetraffic/cli"
 
 module KubeTraffic
