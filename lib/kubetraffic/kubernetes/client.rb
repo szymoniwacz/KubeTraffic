@@ -98,8 +98,34 @@ module KubeTraffic
       def map_path(http_path)
         IngressPath.new(
           path: present(http_path.path) || "/",
-          path_type: present(http_path.pathType)
+          path_type: present(http_path.pathType),
+          backend: map_service_backend(http_path.backend)
         )
+      end
+
+      # networking.k8s.io/v1 HTTPIngressPath backends may reference a
+      # Service or a typed resource. KubeTraffic only preserves a Service
+      # name plus named or numeric port. Missing or non-Service backends
+      # stay nil rather than inventing a default name or port 80.
+      def map_service_backend(backend)
+        service = backend&.service
+        name = present(service&.name)
+        return nil if name.nil?
+
+        port = service.port
+        IngressServiceBackend.new(
+          name: name,
+          port_number: integer_port(port&.number),
+          port_name: present(port&.name)
+        )
+      end
+
+      def integer_port(value)
+        return nil if value.nil? || value.to_s.strip.empty?
+
+        Integer(value)
+      rescue ArgumentError, TypeError
+        nil
       end
 
       def with_mapped_errors

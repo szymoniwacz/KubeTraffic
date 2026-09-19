@@ -26,7 +26,7 @@ RSpec.describe KubeTraffic::CLI do
     KubeTraffic::Kubernetes::Ingress.new(name: name, namespace: namespace, rules: rules)
   end
 
-  def matching_ingress
+  def matching_ingress(backend: service_backend("api", port_number: 80))
     ingress(
       "api",
       namespace: "apps",
@@ -34,10 +34,22 @@ RSpec.describe KubeTraffic::CLI do
         KubeTraffic::Kubernetes::IngressRule.new(
           host: "api.example.com",
           paths: [
-            KubeTraffic::Kubernetes::IngressPath.new(path: "/users", path_type: "Prefix")
+            KubeTraffic::Kubernetes::IngressPath.new(
+              path: "/users",
+              path_type: "Prefix",
+              backend: backend
+            )
           ]
         )
       ]
+    )
+  end
+
+  def service_backend(name, port_number: nil, port_name: nil)
+    KubeTraffic::Kubernetes::IngressServiceBackend.new(
+      name: name,
+      port_number: port_number,
+      port_name: port_name
     )
   end
 
@@ -110,8 +122,45 @@ RSpec.describe KubeTraffic::CLI do
       "Matched Ingress api\n" \
       "  host api.example.com\n" \
       "  path /users\n" \
-      "  pathType Prefix\n"
+      "  pathType Prefix\n" \
+      "  service api:80\n"
     )
+    expect(stderr).to eq("")
+  end
+
+  it "prints a named backend Service port" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress(backend: service_backend("api", port_name: "http"))]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("  service api:http\n")
+    expect(stderr).to eq("")
+  end
+
+  it "reports when the matched backend is not a Service" do
+    stub_cluster(namespace: "apps", ingresses: [matching_ingress(backend: nil)])
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("  backend cannot be interpreted\n")
+    expect(stderr).to eq("")
+  end
+
+  it "reports when the Service backend has no interpretable port" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress(backend: service_backend("api"))]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("  service api (backend port cannot be interpreted)\n")
     expect(stderr).to eq("")
   end
 
