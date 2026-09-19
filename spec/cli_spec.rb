@@ -11,8 +11,12 @@ RSpec.describe KubeTraffic::CLI do
     [status, stdout.string, stderr.string]
   end
 
-  def stub_cluster(client: nil)
-    fake = client || instance_double(KubeTraffic::Kubernetes::Client, verify_connection!: true)
+  def stub_cluster(client: nil, namespace: "default")
+    fake = client || instance_double(
+      KubeTraffic::Kubernetes::Client,
+      verify_connection!: true,
+      namespace: namespace
+    )
     allow(KubeTraffic::Kubernetes::Client).to receive(:connect).and_return(fake)
     fake
   end
@@ -55,7 +59,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("trace", "https://api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq("Tracing api.example.com/users\n")
+    expect(stdout).to eq("Tracing api.example.com/users in namespace default\n")
     expect(stderr).to eq("")
   end
 
@@ -65,20 +69,46 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq("Tracing api.example.com/users\n")
+    expect(stdout).to eq("Tracing api.example.com/users in namespace default\n")
     expect(stderr).to eq("")
   end
 
   it "connects using an optional kubernetes context" do
     client = stub_cluster
     expect(KubeTraffic::Kubernetes::Client).to receive(:connect)
-      .with(context: "staging")
+      .with(context: "staging", namespace: nil)
       .and_return(client)
 
     status, stdout, stderr = run("--context", "staging", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq("Tracing api.example.com/users\n")
+    expect(stdout).to eq("Tracing api.example.com/users in namespace default\n")
+    expect(stderr).to eq("")
+  end
+
+  it "passes --namespace into the kubernetes client" do
+    client = stub_cluster(namespace: "apps")
+    expect(KubeTraffic::Kubernetes::Client).to receive(:connect)
+      .with(context: nil, namespace: "apps")
+      .and_return(client)
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to eq("Tracing api.example.com/users in namespace apps\n")
+    expect(stderr).to eq("")
+  end
+
+  it "accepts -n as a short namespace option" do
+    client = stub_cluster(namespace: "kube-system")
+    expect(KubeTraffic::Kubernetes::Client).to receive(:connect)
+      .with(context: nil, namespace: "kube-system")
+      .and_return(client)
+
+    status, stdout, stderr = run("-n", "kube-system", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to eq("Tracing api.example.com/users in namespace kube-system\n")
     expect(stderr).to eq("")
   end
 
