@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ["szymon@iwacz.pl"]
 
   spec.summary = "Read-only CLI that traces HTTP request routing through Kubernetes."
-  spec.description = spec.summary
+  spec.description = "Read-only CLI that traces HTTP request routing through Ingress, Service, EndpointSlice, Pod, and container port configuration."
   spec.homepage = "https://github.com/szymoniwacz/KubeTraffic"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"

@@ -1,31 +1,55 @@
 # KubeTraffic
 
-Read-only CLI that traces how an HTTP request is routed through Kubernetes.
+Read-only CLI that traces how an HTTP request is routed through Kubernetes
+configuration:
 
-This repository is in early development. The CLI currently reports its version,
-accepts a `trace` target, connects read-only to the current Kubernetes context,
-matches the target host and path against Ingress rules in the selected
-namespace, reports the referenced backend Service name and port, fetches that
-Service to resolve the matching `spec.ports` entry, and lists EndpointSlices
-labeled for that Service. Ready, not-ready, and unknown endpoints are counted
-from retrieved `conditions.ready` values. `ready=true` and omitted/`nil` ready
-conditions are usable (Kubernetes treats nil as true); only `ready=false` is
-unusable. EndpointSlice `targetRef` values that name a Pod are fetched for
-name, IP, phase, and readiness. Numeric `targetPort` values are shown as
-retrieved. Named `targetPort` values are resolved per usable Pod. Different
-pods may map the same name to different numbers. Unresolved named ports are
-reported instead of guessed. The trace then shows the matching container
-`containerPort` and states that this declaration does not prove a process is
-listening. Output is an ordered plaintext trace with `[ok]`/`[x]` markers and a
-final result line. It does not use ANSI color. Failures are recorded as
-structured findings with codes such as
-`ingress_not_found`, `service_not_found`, `service_port_not_found`,
-`service_no_endpoints`, `endpoint_not_ready`, `pod_not_found`, and
-`target_port_unresolved`.
+```text
+Ingress -> Service -> EndpointSlice -> Pod -> Container/port
+```
+
+This is a configuration trace, not a packet capture. It explains which
+Kubernetes objects would handle a host and path, and where that chain is
+broken.
+
+## Requirements
+
+- Ruby 3.2 or newer
+- read access to Ingress, Service, EndpointSlice, and Pod objects in the
+  target namespace
+- a kubeconfig (`KUBECONFIG` or `~/.kube/config`)
+
+KubeTraffic does not write to the cluster.
+
+## Installation
+
+The project is not published as a gem yet. For development:
+
+```text
+git clone https://github.com/szymoniwacz/KubeTraffic.git
+cd KubeTraffic
+bundle install
+bin/kubetraffic --version
+```
+
+## Usage
+
+```text
+bin/kubetraffic --version
+bin/kubetraffic trace https://api.example.com/users
+bin/kubetraffic --context staging -n apps trace api.example.com/users
+```
+
+`trace` accepts a URL or `host/path`. It loads kubeconfig, uses `--context`
+when given, and verifies that the API is reachable before continuing.
+
+Namespace resolution follows kubectl: `--namespace`/`-n`, then the selected
+kubeconfig context namespace, then `default`.
+
+Output is plaintext with `[ok]` and `[x]` markers. It does not use ANSI color.
 
 ```text
 $ bin/kubetraffic --version
-KubeTraffic 0.0.1
+KubeTraffic 0.1.0
 
 $ bin/kubetraffic trace https://api.example.com/users
 Tracing api.example.com/users in namespace default
@@ -61,35 +85,45 @@ Tracing api.example.com/users in namespace default
 Result: configuration chain complete
 ```
 
-`trace` loads kubeconfig from `KUBECONFIG` or `~/.kube/config` and verifies that
-the Kubernetes API is reachable before continuing. Use `--context` to select a
-named kubeconfig context.
+A broken chain ends with `Result: failed (<code>)`. Codes currently include
+`ingress_not_found`, `service_not_found`, `service_port_not_found`,
+`service_no_endpoints`, `endpoint_not_ready`, `pod_not_found`, and
+`target_port_unresolved`.
 
-Namespace resolution follows kubectl: `--namespace`/`-n` wins, then the selected
-kubeconfig context namespace, then `default`. Ingress listing and matching use
-this namespace. Host matching follows Kubernetes Ingress rules, including
-single-label wildcards and catch-all hosts. Path matching supports `Exact` and
-`Prefix`. `ImplementationSpecific` and missing `pathType` match only the exact
-path. Among matching rules, the longest path wins, then `Exact` over `Prefix`.
-Any remaining tie is broken deterministically by Ingress name; that fallback is
-KubeTraffic-specific, not Kubernetes routing semantics. The matched path's
-`networking.k8s.io/v1` Service backend is shown as `service name:port`. Missing
-or non-Service backends, and unreadable ports, are reported instead of defaulting
-to a name or port 80. A numeric Ingress backend port is matched against
-`Service.spec.ports[].port`; a named backend port is matched against
-`Service.spec.ports[].name`. A missing Service or unmatched Service port is
-reported without inventing a default port. EndpointSlices are selected with the
-`kubernetes.io/service-name` label in the same namespace. Missing slices and
-slices with no endpoints are reported. Endpoint readiness is shown as retrieved
-and summarized as ready, not-ready, and unknown counts. Endpoints with
-`ready=true` or omitted/`nil` `conditions.ready` are usable; unknown counts are
-display-only. Only `ready=false` is unusable. Pods are resolved only from
-EndpointSlice `targetRef` entries of kind `Pod`. Missing Pods and missing
-target references are reported without matching endpoints to Pods by IP. A
-numeric Service `targetPort` is shown directly. A named `targetPort` is
-resolved per usable endpoint Pod. Different pods may map the same name to
-different numbers. The name is unresolved only when an inspected usable Pod
-does not declare it unambiguously. An omitted `targetPort` uses the Service
-port number, matching Kubernetes. Not-ready endpoints are not used for
-named-port resolution. A matching declared `containerPort` is shown as the last
-hop. That field is configuration metadata, not proof that a process is listening.
+## What it inspects
+
+- `networking.k8s.io/v1` Ingress host and path matching (`Exact`, `Prefix`;
+  `ImplementationSpecific` and missing `pathType` match the exact path only)
+- Ingress Service backends (named or numeric ports)
+- core `v1` Service ports and `targetPort`
+- `discovery.k8s.io/v1` EndpointSlices labeled
+  `kubernetes.io/service-name=<service>`
+- endpoint `conditions.ready` (only `true` is treated as usable)
+- Pods named by EndpointSlice `targetRef` of kind `Pod`
+- declared container ports used to resolve a named `targetPort`
+
+Among matching Ingress rules, the longest path wins, then `Exact` over
+`Prefix`. Remaining ties are broken by Ingress name; that fallback is
+KubeTraffic-specific, not Kubernetes routing semantics.
+
+An omitted Service `targetPort` uses the Service port number, matching
+Kubernetes. KubeTraffic does not invent names, ports, Pods, or endpoints that
+were not retrieved.
+
+## Limitations
+
+From configuration alone, KubeTraffic cannot prove:
+
+- that a process is listening on a declared `containerPort`
+- that packets are not dropped by a CNI, NetworkPolicy, or something outside
+  the inspected objects
+- that the application handler works
+- that external DNS resolves
+- that a service mesh is healthy
+
+It also does not currently support Gateway API, NetworkPolicy analysis, watch
+mode, JSON output, or active network probes.
+
+## License
+
+MIT
