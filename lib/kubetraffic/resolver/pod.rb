@@ -42,6 +42,8 @@ module KubeTraffic
 
       def pod_refs
         @endpoints.filter_map do |endpoint|
+          next if endpoint.ready == false
+
           ref = endpoint.target_ref
           next if ref.nil?
           next unless ref.kind == "Pod"

@@ -452,6 +452,78 @@ RSpec.describe KubeTraffic::CLI do
     expect(stderr).to eq("")
   end
 
+  it "does not report a missing Pod referenced only by a not-ready endpoint" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [
+            endpoint("10.1.2.3", target_ref: target_ref("api-a")),
+            endpoint("10.1.2.4", ready: false, target_ref: target_ref("api-b"))
+          ]
+        )
+      ],
+      pods: { ["apps", "api-a"] => mapped_pod("api-a") }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Pod api-a\n")
+    expect(stdout).not_to include("Pod api-b not found")
+    expect(stderr).to eq("")
+  end
+
+  it "reports a missing Pod named by a ready=nil endpoint" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.5", ready: nil, target_ref: target_ref("api-abc"))]
+        )
+      ]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Pod api-abc not found in namespace apps\n")
+    expect(stderr).to eq("")
+  end
+
+  it "reports missing Pods only for usable endpoints" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [
+            endpoint("10.1.2.3", target_ref: target_ref("api-a")),
+            endpoint("10.1.2.4", ready: false, target_ref: target_ref("api-b")),
+            endpoint("10.1.2.5", ready: nil, target_ref: target_ref("api-c"))
+          ]
+        )
+      ],
+      pods: { ["apps", "api-a"] => mapped_pod("api-a") }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Pod api-a\n")
+    expect(stdout).not_to include("Pod api-b not found")
+    expect(stdout).to include("Pod api-c not found in namespace apps\n")
+    expect(stderr).to eq("")
+  end
+
   it "reports when Ingresses exist but no rule matches the target" do
     stub_cluster(
       namespace: "apps",

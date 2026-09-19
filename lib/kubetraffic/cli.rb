@@ -182,7 +182,7 @@ module KubeTraffic
     def resolve_pods(endpoint_result, client)
       return nil if endpoint_result.nil?
 
-      Resolver::Pod.resolve(endpoint_result.endpoints, client)
+      Resolver::Pod.resolve(endpoint_result.usable_endpoints, client)
     end
 
     def print_pods(endpoint_result, result)
