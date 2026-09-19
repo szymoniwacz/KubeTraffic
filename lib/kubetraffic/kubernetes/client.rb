@@ -81,8 +81,8 @@ module KubeTraffic
             "not authorized to access the Kubernetes API: #{error.message}"
           )
         else
-          ConnectionError.new(
-            "unable to connect to the Kubernetes API: #{error.message}"
+          ApiError.new(
+            "Kubernetes API error: #{error.message}"
           )
         end
       end

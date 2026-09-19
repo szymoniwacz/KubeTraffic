@@ -138,15 +138,15 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     )
   end
 
-  it "maps other API errors as connection failures" do
+  it "maps other Kubernetes HTTP errors as API errors" do
     api = instance_double(Kubeclient::Client)
     allow(api).to receive(:api).and_raise(http_error(500, "Internal error"))
 
     expect {
       described_class.new(api: api).verify_connection!
     }.to raise_error(
-      KubeTraffic::Kubernetes::ConnectionError,
-      /unable to connect to the Kubernetes API/
+      KubeTraffic::Kubernetes::ApiError,
+      /Kubernetes API error/
     )
   end
 
