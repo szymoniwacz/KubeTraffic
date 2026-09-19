@@ -2,6 +2,7 @@
 
 require_relative "errors"
 require_relative "ingress"
+require_relative "service"
 
 module KubeTraffic
   module Kubernetes
@@ -36,6 +37,19 @@ module KubeTraffic
         with_mapped_errors do
           resources = networking_api.get_ingresses(namespace: namespace)
           Array(resources).map { |resource| map_ingress(resource) }.sort_by(&:name)
+        end
+      end
+
+      def get_service(name)
+        service_name = present(name)
+        return nil if service_name.nil?
+
+        with_mapped_errors do
+          map_service(@api.get_service(service_name, namespace))
+        rescue Kubeclient::HttpError => e
+          return nil if not_found?(e)
+
+          raise
         end
       end
 
@@ -79,6 +93,10 @@ module KubeTraffic
         @networking_api or raise ConnectionError, "networking.k8s.io client is not configured"
       end
 
+      def not_found?(error)
+        error.error_code.to_i == 404
+      end
+
       def map_ingress(resource)
         metadata = resource.metadata
         Ingress.new(
@@ -117,6 +135,28 @@ module KubeTraffic
           name: name,
           port_number: integer_port(port&.number),
           port_name: present(port&.name)
+        )
+      end
+
+      # Core v1 Service mapping keeps identity and spec.ports needed to
+      # match an Ingress backend. targetPort is left unmapped until that
+      # resolution exists.
+      def map_service(resource)
+        metadata = resource.metadata
+        Service.new(
+          name: metadata.name,
+          namespace: present(metadata.namespace) || namespace,
+          ports: Array(resource.spec&.ports).filter_map { |port| map_service_port(port) }
+        )
+      end
+
+      def map_service_port(port)
+        number = integer_port(port.port)
+        return nil if number.nil?
+
+        ServicePort.new(
+          name: present(port.name),
+          port: number
         )
       end
 

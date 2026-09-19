@@ -11,12 +11,13 @@ RSpec.describe KubeTraffic::CLI do
     [status, stdout.string, stderr.string]
   end
 
-  def stub_cluster(client: nil, namespace: "default", ingresses: [])
+  def stub_cluster(client: nil, namespace: "default", ingresses: [], service: nil)
     fake = client || instance_double(
       KubeTraffic::Kubernetes::Client,
       verify_connection!: true,
       namespace: namespace,
-      list_ingresses: ingresses
+      list_ingresses: ingresses,
+      get_service: service
     )
     allow(KubeTraffic::Kubernetes::Client).to receive(:connect).and_return(fake)
     fake
@@ -51,6 +52,14 @@ RSpec.describe KubeTraffic::CLI do
       port_number: port_number,
       port_name: port_name
     )
+  end
+
+  def service_port(port, name: nil)
+    KubeTraffic::Kubernetes::ServicePort.new(name: name, port: port)
+  end
+
+  def mapped_service(name = "api", namespace: "apps", ports: [service_port(80, name: "http")])
+    KubeTraffic::Kubernetes::Service.new(name: name, namespace: namespace, ports: ports)
   end
 
   it "prints the version for --version" do
@@ -112,7 +121,7 @@ RSpec.describe KubeTraffic::CLI do
   end
 
   it "prints the matching Ingress rule and path" do
-    stub_cluster(namespace: "apps", ingresses: [matching_ingress])
+    stub_cluster(namespace: "apps", ingresses: [matching_ingress], service: mapped_service)
 
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
@@ -123,7 +132,9 @@ RSpec.describe KubeTraffic::CLI do
       "  host api.example.com\n" \
       "  path /users\n" \
       "  pathType Prefix\n" \
-      "  service api:80\n"
+      "  service api:80\n" \
+      "Service api\n" \
+      "  port 80 name http\n"
     )
     expect(stderr).to eq("")
   end
@@ -131,13 +142,72 @@ RSpec.describe KubeTraffic::CLI do
   it "prints a named backend Service port" do
     stub_cluster(
       namespace: "apps",
-      ingresses: [matching_ingress(backend: service_backend("api", port_name: "http"))]
+      ingresses: [matching_ingress(backend: service_backend("api", port_name: "http"))],
+      service: mapped_service
     )
 
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
     expect(stdout).to include("  service api:http\n")
+    expect(stderr).to eq("")
+  end
+
+  it "prints the resolved Service port for a numeric Ingress backend" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service(
+        ports: [service_port(80, name: "http"), service_port(443, name: "https")]
+      )
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Service api\n  port 80 name http\n")
+    expect(stderr).to eq("")
+  end
+
+  it "prints the resolved Service port for a named Ingress backend" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress(backend: service_backend("api", port_name: "https"))],
+      service: mapped_service(
+        ports: [service_port(80, name: "http"), service_port(443, name: "https")]
+      )
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("  service api:https\n")
+    expect(stdout).to include("Service api\n  port 443 name https\n")
+    expect(stderr).to eq("")
+  end
+
+  it "reports a missing Service without inventing a port" do
+    stub_cluster(namespace: "apps", ingresses: [matching_ingress], service: nil)
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("  service api:80\n")
+    expect(stdout).to include("Service api not found in namespace apps\n")
+    expect(stderr).to eq("")
+  end
+
+  it "reports an unmatched Service port" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress(backend: service_backend("api", port_number: 8080))],
+      service: mapped_service(ports: [service_port(80, name: "http"), service_port(443)])
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Service api\n  no port matches 8080\n")
     expect(stderr).to eq("")
   end
 
@@ -154,13 +224,15 @@ RSpec.describe KubeTraffic::CLI do
   it "reports when the Service backend has no interpretable port" do
     stub_cluster(
       namespace: "apps",
-      ingresses: [matching_ingress(backend: service_backend("api"))]
+      ingresses: [matching_ingress(backend: service_backend("api"))],
+      service: mapped_service
     )
 
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
     expect(stdout).to include("  service api (backend port cannot be interpreted)\n")
+    expect(stdout).to include("Service api\n  backend port cannot be interpreted\n")
     expect(stderr).to eq("")
   end
 
@@ -293,6 +365,24 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(1)
     expect(stdout).to eq("")
     expect(stderr).to include("Kubernetes API error: Ingress is forbidden")
+  end
+
+  it "reports kubernetes API errors when fetching a Service" do
+    client = instance_double(
+      KubeTraffic::Kubernetes::Client,
+      verify_connection!: true,
+      namespace: "apps",
+      list_ingresses: [matching_ingress]
+    )
+    allow(client).to receive(:get_service)
+      .and_raise(KubeTraffic::Kubernetes::ApiError, "Kubernetes API error: Service is forbidden")
+    stub_cluster(client: client)
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(1)
+    expect(stdout).to eq("")
+    expect(stderr).to include("Kubernetes API error: Service is forbidden")
   end
 
   it "rejects an invalid trace target" do

@@ -443,6 +443,115 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     expect(malformed_port.backend.port_name).to be_nil
   end
 
+  def fetched_service(spec:, name: "api", namespace: "apps")
+    api = double("api")
+    allow(api).to receive(:get_service).with(name, namespace).and_return(
+      Kubeclient::Resource.new(
+        "metadata" => { "name" => name, "namespace" => namespace },
+        "spec" => spec
+      )
+    )
+
+    described_class.new(
+      api: api,
+      networking_api: double("networking_api"),
+      namespace: namespace
+    ).get_service(name)
+  end
+
+  it "fetches a Service from the selected namespace" do
+    service = fetched_service(
+      spec: {
+        "ports" => [
+          { "name" => "http", "port" => 80 },
+          { "name" => "https", "port" => 443 }
+        ]
+      }
+    )
+
+    expect(service).to eq(
+      KubeTraffic::Kubernetes::Service.new(
+        name: "api",
+        namespace: "apps",
+        ports: [
+          KubeTraffic::Kubernetes::ServicePort.new(name: "http", port: 80),
+          KubeTraffic::Kubernetes::ServicePort.new(name: "https", port: 443)
+        ]
+      )
+    )
+  end
+
+  it "drops Service ports that have no numeric port" do
+    service = fetched_service(
+      spec: {
+        "ports" => [
+          { "name" => "http" },
+          { "name" => "alt", "port" => "not-a-port" },
+          { "port" => 9090 }
+        ]
+      }
+    )
+
+    expect(service.ports).to eq(
+      [KubeTraffic::Kubernetes::ServicePort.new(name: nil, port: 9090)]
+    )
+  end
+
+  it "returns nil when the Service is missing" do
+    api = double("api")
+    allow(api).to receive(:get_service).with("api", "default")
+      .and_raise(http_error(404, "services \"api\" not found"))
+
+    expect(
+      described_class.new(
+        api: api,
+        networking_api: double("networking_api")
+      ).get_service("api")
+    ).to be_nil
+  end
+
+  it "does not query the API for a blank Service name" do
+    api = double("api")
+    expect(api).not_to receive(:get_service)
+
+    expect(
+      described_class.new(
+        api: api,
+        networking_api: double("networking_api")
+      ).get_service(" ")
+    ).to be_nil
+  end
+
+  it "maps Service get authorization failures" do
+    api = double("api")
+    allow(api).to receive(:get_service).and_raise(http_error(403, "Forbidden"))
+
+    expect {
+      described_class.new(
+        api: api,
+        networking_api: double("networking_api")
+      ).get_service("api")
+    }.to raise_error(
+      KubeTraffic::Kubernetes::AuthorizationError,
+      /not authorized to access the Kubernetes API/
+    )
+  end
+
+  it "maps Service get HTTP errors as API errors" do
+    api = double("api")
+    allow(api).to receive(:get_service).and_raise(http_error(500, "Internal error"))
+
+    expect {
+      described_class.new(
+        api: api,
+        networking_api: double("networking_api")
+      ).get_service("api")
+    }.to raise_error(
+      KubeTraffic::Kubernetes::ApiError,
+      /Kubernetes API error/
+    )
+  end
+
   it "maps Ingress list authorization failures" do
     networking_api = double("networking_api")
     allow(networking_api).to receive(:get_ingresses).and_raise(http_error(403, "Forbidden"))
