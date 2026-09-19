@@ -11,14 +11,19 @@ RSpec.describe KubeTraffic::CLI do
     [status, stdout.string, stderr.string]
   end
 
-  def stub_cluster(client: nil, namespace: "default")
+  def stub_cluster(client: nil, namespace: "default", ingresses: [])
     fake = client || instance_double(
       KubeTraffic::Kubernetes::Client,
       verify_connection!: true,
-      namespace: namespace
+      namespace: namespace,
+      list_ingresses: ingresses
     )
     allow(KubeTraffic::Kubernetes::Client).to receive(:connect).and_return(fake)
     fake
+  end
+
+  def ingress(name, namespace: "default")
+    KubeTraffic::Kubernetes::Ingress.new(name: name, namespace: namespace, rules: [])
   end
 
   it "prints the version for --version" do
@@ -59,7 +64,10 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("trace", "https://api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq("Tracing api.example.com/users in namespace default\n")
+    expect(stdout).to eq(
+      "Tracing api.example.com/users in namespace default\n" \
+      "No Ingress resources in namespace default\n"
+    )
     expect(stderr).to eq("")
   end
 
@@ -69,7 +77,28 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq("Tracing api.example.com/users in namespace default\n")
+    expect(stdout).to eq(
+      "Tracing api.example.com/users in namespace default\n" \
+      "No Ingress resources in namespace default\n"
+    )
+    expect(stderr).to eq("")
+  end
+
+  it "lists Ingress candidates from the selected namespace" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [ingress("web", namespace: "apps"), ingress("api", namespace: "apps")]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to eq(
+      "Tracing api.example.com/users in namespace apps\n" \
+      "Ingress candidates:\n" \
+      "  web\n" \
+      "  api\n"
+    )
     expect(stderr).to eq("")
   end
 
@@ -82,7 +111,10 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--context", "staging", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq("Tracing api.example.com/users in namespace default\n")
+    expect(stdout).to eq(
+      "Tracing api.example.com/users in namespace default\n" \
+      "No Ingress resources in namespace default\n"
+    )
     expect(stderr).to eq("")
   end
 
@@ -95,7 +127,10 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq("Tracing api.example.com/users in namespace apps\n")
+    expect(stdout).to eq(
+      "Tracing api.example.com/users in namespace apps\n" \
+      "No Ingress resources in namespace apps\n"
+    )
     expect(stderr).to eq("")
   end
 
@@ -108,7 +143,10 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("-n", "kube-system", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq("Tracing api.example.com/users in namespace kube-system\n")
+    expect(stdout).to eq(
+      "Tracing api.example.com/users in namespace kube-system\n" \
+      "No Ingress resources in namespace kube-system\n"
+    )
     expect(stderr).to eq("")
   end
 
@@ -147,6 +185,23 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(1)
     expect(stdout).to eq("")
     expect(stderr).to include("not authorized to access the Kubernetes API")
+  end
+
+  it "reports kubernetes API errors when listing Ingresses" do
+    client = instance_double(
+      KubeTraffic::Kubernetes::Client,
+      verify_connection!: true,
+      namespace: "default"
+    )
+    allow(client).to receive(:list_ingresses)
+      .and_raise(KubeTraffic::Kubernetes::ApiError, "Kubernetes API error: Ingress is forbidden")
+    stub_cluster(client: client)
+
+    status, stdout, stderr = run("trace", "api.example.com/users")
+
+    expect(status).to eq(1)
+    expect(stdout).to eq("")
+    expect(stderr).to include("Kubernetes API error: Ingress is forbidden")
   end
 
   it "rejects an invalid trace target" do
