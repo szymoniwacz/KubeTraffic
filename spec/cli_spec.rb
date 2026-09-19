@@ -75,6 +75,14 @@ RSpec.describe KubeTraffic::CLI do
     expect(stderr).to include("missing target")
   end
 
+  it "rejects extra arguments after the target" do
+    status, stdout, stderr = run("trace", "api.example.com/users", "extra")
+
+    expect(status).to eq(1)
+    expect(stdout).to eq("")
+    expect(stderr).to include("unexpected arguments: extra")
+  end
+
   it "rejects unknown commands" do
     status, stdout, stderr = run("watch")
 
