@@ -281,7 +281,7 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     )
   end
 
-  it "maps missing Ingress path fields to Kubernetes defaults" do
+  it "normalizes a missing Ingress path to / and preserves a missing pathType" do
     networking_api = double("networking_api")
     allow(networking_api).to receive(:get_ingresses).and_return(
       [
@@ -303,7 +303,7 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
 
     expect(ingress.rules.first.host).to be_nil
     expect(ingress.rules.first.paths).to eq(
-      [KubeTraffic::Kubernetes::IngressPath.new(path: "/", path_type: "ImplementationSpecific")]
+      [KubeTraffic::Kubernetes::IngressPath.new(path: "/", path_type: nil)]
     )
   end
 

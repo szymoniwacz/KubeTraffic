@@ -98,7 +98,7 @@ module KubeTraffic
       def map_path(http_path)
         IngressPath.new(
           path: present(http_path.path) || "/",
-          path_type: present(http_path.pathType) || "ImplementationSpecific"
+          path_type: present(http_path.pathType)
         )
       end
 
