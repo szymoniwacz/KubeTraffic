@@ -1,0 +1,9 @@
+# frozen_string_literal: true
+
+require_relative "kubernetes/errors"
+require_relative "kubernetes/client"
+
+module KubeTraffic
+  module Kubernetes
+  end
+end

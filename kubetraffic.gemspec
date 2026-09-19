@@ -26,4 +26,7 @@ Gem::Specification.new do |spec|
   spec.bindir = "bin"
   spec.executables = ["kubetraffic"]
   spec.require_paths = ["lib"]
+
+  spec.add_dependency "base64"
+  spec.add_dependency "kubeclient", ">= 4.13"
 end
