@@ -20,41 +20,70 @@ RSpec.describe KubeTraffic::Resolver::Container do
     )
   end
 
-  def target(number:, name: nil, resolved: true)
-    KubeTraffic::Resolver::TargetPort::Result.new(number: number, name: name, resolved: resolved)
+  def numeric_target(number, resolved: true)
+    KubeTraffic::Resolver::TargetPort::Result.new(name: nil, number: number, resolved: resolved)
+  end
+
+  def named_target(*mappings, name: "http", resolved: true)
+    KubeTraffic::Resolver::TargetPort::Result.new(
+      name: name,
+      number: nil,
+      resolved: resolved,
+      mappings: mappings
+    )
+  end
+
+  def mapping(mapped, number)
+    KubeTraffic::Resolver::TargetPort::Mapping.new(pod: mapped, number: number)
   end
 
   it "matches a numeric targetPort to a declared containerPort" do
     mapped = pod(container("api", container_port(8080, name: "http")))
-    result = described_class.resolve([mapped], target(number: 8080))
+    result = described_class.resolve([mapped], numeric_target(8080))
 
     expect(result.matches.map { |match| [match.container.name, match.port.container_port] })
       .to eq([["api", 8080]])
+    expect(result.unmatched_pods).to eq([])
+  end
+
+  it "records pods whose declared ports do not match a numeric targetPort" do
+    mapped = pod(container("api", container_port(9090, name: "http")))
+    result = described_class.resolve([mapped], numeric_target(8080))
+
+    expect(result.matches).to eq([])
+    expect(result.unmatched_pods).to eq([mapped])
+  end
+
+  it "matches named targetPort mappings using each pod's own number" do
+    first = pod(container("api", container_port(8080, name: "http")), name: "api-a")
+    second = pod(container("api", container_port(9090, name: "http")), name: "api-b")
+    result = described_class.resolve(
+      [first, second],
+      named_target(mapping(first, 8080), mapping(second, 9090))
+    )
+
+    expect(result.matches.map { |match| [match.pod.name, match.port.container_port] })
+      .to eq([["api-a", 8080], ["api-b", 9090]])
+    expect(result.unmatched_pods).to eq([])
   end
 
   it "matches a named targetPort only when the container port name matches" do
     mapped = pod(
       container("api", container_port(8080, name: "http"), container_port(8080, name: "alt"))
     )
-    result = described_class.resolve([mapped], target(number: 8080, name: "http"))
+    result = described_class.resolve([mapped], named_target(mapping(mapped, 8080)))
 
     expect(result.matches.map { |match| match.port.name }).to eq(["http"])
-  end
-
-  it "returns no match when no containerPort equals the resolved targetPort" do
-    mapped = pod(container("api", container_port(9090, name: "http")))
-    result = described_class.resolve([mapped], target(number: 8080))
-
-    expect(result.matches).to eq([])
   end
 
   it "returns no match when the targetPort was not resolved" do
     mapped = pod(container("api", container_port(8080, name: "http")))
     result = described_class.resolve(
       [mapped],
-      target(number: nil, name: "http", resolved: false)
+      named_target(name: "http", resolved: false)
     )
 
     expect(result.matches).to eq([])
+    expect(result.unmatched_pods).to eq([])
   end
 end

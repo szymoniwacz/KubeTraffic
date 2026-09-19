@@ -68,7 +68,7 @@ module KubeTraffic
       print_endpoint_slices(service_result, endpoint_result)
       print_pods(endpoint_result, pod_result)
       print_target_port(service_result, endpoint_result, pod_result)
-      print_containers(service_result, pod_result)
+      print_containers(service_result, endpoint_result, pod_result)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
@@ -239,15 +239,18 @@ module KubeTraffic
       end
     end
 
-    def print_containers(service_result, pod_result)
+    def print_containers(service_result, endpoint_result, pod_result)
       port = service_result&.port
       return if port.nil?
 
-      target = Resolver::TargetPort.resolve(port, pod_result&.pods)
+      usable_pods = Resolver::Pod.for_usable_endpoints(pod_result, endpoint_result)
+      target = Resolver::TargetPort.resolve(port, usable_pods)
       return unless target.resolved
 
-      result = Resolver::Container.resolve(pod_result&.pods, target)
+      result = Resolver::Container.resolve(usable_pods, target)
       if result.matches.empty?
+        return if target.number.nil?
+
         @stdout.puts "No declared containerPort matches #{target.number}"
       else
         result.matches.each do |match|

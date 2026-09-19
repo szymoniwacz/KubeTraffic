@@ -628,6 +628,8 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to include("Target port named http\n  api-a 8080\n  api-b 9090\n")
     expect(stdout).not_to include("api-c 7070")
+    expect(stdout).to include("Container api on Pod api-a\n  port 8080 name http\n")
+    expect(stdout).to include("Container api on Pod api-b\n  port 9090 name http\n")
     expect(stderr).to eq("")
   end
 
