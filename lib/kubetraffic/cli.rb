@@ -143,6 +143,7 @@ module KubeTraffic
 
       if result.slices.empty?
         @stdout.puts "No EndpointSlices for Service #{service.name}"
+        @stdout.puts "No usable endpoints for Service #{service.name}"
         return
       end
 
@@ -158,9 +159,22 @@ module KubeTraffic
         end
       end
 
-      return unless result.endpoints.empty?
+      print_endpoint_readiness(service, result)
+    end
 
-      @stdout.puts "No endpoints for Service #{service.name}"
+    def print_endpoint_readiness(service, result)
+      if result.endpoints.empty?
+        @stdout.puts "No endpoints for Service #{service.name}"
+        @stdout.puts "No usable endpoints for Service #{service.name}"
+        return
+      end
+
+      @stdout.puts "  ready #{result.ready_endpoints.size}"
+      @stdout.puts "  not-ready #{result.not_ready_endpoints.size}"
+      @stdout.puts "  unknown readiness #{result.unknown_readiness_endpoints.size}"
+      return unless result.usable_endpoints.empty?
+
+      @stdout.puts "No usable endpoints for Service #{service.name}"
     end
 
     def format_endpoint(endpoint)

@@ -149,7 +149,8 @@ RSpec.describe KubeTraffic::CLI do
       "  service api:80\n" \
       "Service api\n" \
       "  port 80 name http\n" \
-      "No EndpointSlices for Service api\n"
+      "No EndpointSlices for Service api\n" \
+      "No usable endpoints for Service api\n"
     )
     expect(stderr).to eq("")
   end
@@ -285,6 +286,7 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("No EndpointSlices for Service api\n")
+    expect(stdout).to include("No usable endpoints for Service api\n")
     expect(stderr).to eq("")
   end
 
@@ -301,6 +303,7 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to include("EndpointSlice api-empty\n  no endpoints\n")
     expect(stdout).to include("No endpoints for Service api\n")
+    expect(stdout).to include("No usable endpoints for Service api\n")
     expect(stderr).to eq("")
   end
 
@@ -312,6 +315,50 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).not_to include("EndpointSlice")
+    expect(stderr).to eq("")
+  end
+
+  it "reports ready and not-ready endpoint counts" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.3"), endpoint("10.1.2.4", ready: false)]
+        )
+      ]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("  10.1.2.3 ready=true\n")
+    expect(stdout).to include("  10.1.2.4 ready=false\n")
+    expect(stdout).to include("  ready 1\n  not-ready 1\n  unknown readiness 0\n")
+    expect(stdout).not_to include("No usable endpoints")
+    expect(stderr).to eq("")
+  end
+
+  it "reports when endpoints exist but none are usable" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.4", ready: false), endpoint("10.1.2.5", ready: nil)]
+        )
+      ]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("  ready 0\n  not-ready 1\n  unknown readiness 1\n")
+    expect(stdout).to include("No usable endpoints for Service api\n")
     expect(stderr).to eq("")
   end
 
