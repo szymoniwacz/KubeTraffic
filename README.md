@@ -45,7 +45,11 @@ when given, and verifies that the API is reachable before continuing.
 Namespace resolution follows kubectl: `--namespace`/`-n`, then the selected
 kubeconfig context namespace, then `default`.
 
-Output is plaintext with `[ok]` and `[x]` markers. It does not use ANSI color.
+Output is plaintext with `[ok]` and `[x]` markers. `[x]` is used only when a
+hop has an error finding. Warnings are listed before the result and do not
+fail the chain. A complete chain ends with `Result: configuration chain
+complete`; a broken chain ends with `Result: failed (<code>)`. Output does not
+use ANSI color.
 
 ```text
 $ bin/kubetraffic --version
@@ -85,10 +89,11 @@ Tracing api.example.com/users in namespace default
 Result: configuration chain complete
 ```
 
-A broken chain ends with `Result: failed (<code>)`. Codes currently include
-`ingress_not_found`, `service_not_found`, `service_port_not_found`,
+A broken chain ends with `Result: failed (<code>)`. Error codes currently
+include `ingress_not_found`, `service_not_found`, `service_port_not_found`,
 `service_no_endpoints`, `endpoint_not_ready`, `pod_not_found`, and
-`target_port_unresolved`.
+`target_port_unresolved`. Warnings such as `pod_target_ref_missing` and
+`container_port_unmatched` do not fail the result.
 
 ## What it inspects
 
@@ -98,17 +103,21 @@ A broken chain ends with `Result: failed (<code>)`. Codes currently include
 - core `v1` Service ports and `targetPort`
 - `discovery.k8s.io/v1` EndpointSlices labeled
   `kubernetes.io/service-name=<service>`
-- endpoint `conditions.ready` (only `true` is treated as usable)
+- endpoint `conditions.ready` (`true` and omitted/`nil` are usable; Kubernetes
+  treats nil as true; only `false` is unusable)
 - Pods named by EndpointSlice `targetRef` of kind `Pod`
-- declared container ports used to resolve a named `targetPort`
+- declared container ports used to resolve a named `targetPort` per usable pod
 
 Among matching Ingress rules, the longest path wins, then `Exact` over
 `Prefix`. Remaining ties are broken by Ingress name; that fallback is
 KubeTraffic-specific, not Kubernetes routing semantics.
 
 An omitted Service `targetPort` uses the Service port number, matching
-Kubernetes. KubeTraffic does not invent names, ports, Pods, or endpoints that
-were not retrieved.
+Kubernetes. A named `targetPort` is resolved independently on each usable
+endpoint Pod, so different pods may map the same name to different numbers.
+The name is unresolved only when an inspected usable Pod does not declare it
+unambiguously. Not-ready endpoints are not used for that lookup. KubeTraffic
+does not invent names, ports, Pods, or endpoints that were not retrieved.
 
 ## Limitations
 
