@@ -8,9 +8,9 @@ matches the target host and path against Ingress rules in the selected
 namespace, reports the referenced backend Service name and port, fetches that
 Service to resolve the matching `spec.ports` entry, and lists EndpointSlices
 labeled for that Service. Ready, not-ready, and unknown endpoints are counted
-from retrieved `conditions.ready` values. Only `ready=true` is treated as
-usable; unknown readiness is not inferred. It does not yet resolve endpoints to
-Pods or `targetPort`.
+from retrieved `conditions.ready` values. `ready=true` and omitted/`nil` ready
+conditions are usable (Kubernetes treats nil as true); only `ready=false` is
+unusable. It does not yet resolve endpoints to Pods or `targetPort`.
 
 ```text
 $ bin/kubetraffic --version
@@ -67,6 +67,6 @@ to a name or port 80. A numeric Ingress backend port is matched against
 reported without inventing a default port. EndpointSlices are selected with the
 `kubernetes.io/service-name` label in the same namespace. Missing slices and
 slices with no endpoints are reported. Endpoint readiness is shown as retrieved
-and summarized as ready, not-ready, and unknown counts. Only endpoints with
-`ready=true` are treated as usable; unknown (`nil`) ready conditions are not
-inferred as ready.
+and summarized as ready, not-ready, and unknown counts. Endpoints with
+`ready=true` or omitted/`nil` `conditions.ready` are usable; unknown counts are
+display-only. Only `ready=false` is unusable.

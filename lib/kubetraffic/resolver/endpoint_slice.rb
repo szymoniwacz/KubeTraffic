@@ -17,7 +17,7 @@ module KubeTraffic
         end
 
         def usable_endpoints
-          ready_endpoints
+          endpoints.select { |endpoint| endpoint.ready != false }
         end
       end
 

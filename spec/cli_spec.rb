@@ -349,6 +349,27 @@ RSpec.describe KubeTraffic::CLI do
       endpoint_slices: [
         endpoint_slice(
           "api-abc",
+          endpoints: [endpoint("10.1.2.4", ready: false), endpoint("10.1.2.5", ready: false)]
+        )
+      ]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("  ready 0\n  not-ready 2\n  unknown readiness 0\n")
+    expect(stdout).to include("No usable endpoints for Service api\n")
+    expect(stderr).to eq("")
+  end
+
+  it "treats omitted endpoint readiness as usable" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
           endpoints: [endpoint("10.1.2.4", ready: false), endpoint("10.1.2.5", ready: nil)]
         )
       ]
@@ -358,7 +379,7 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("  ready 0\n  not-ready 1\n  unknown readiness 1\n")
-    expect(stdout).to include("No usable endpoints for Service api\n")
+    expect(stdout).not_to include("No usable endpoints")
     expect(stderr).to eq("")
   end
 

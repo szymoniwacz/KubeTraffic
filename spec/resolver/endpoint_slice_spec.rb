@@ -92,15 +92,15 @@ RSpec.describe KubeTraffic::Resolver::EndpointSlice do
     expect(result.ready_endpoints.map { |endpoint| endpoint.addresses }).to eq([["10.0.0.1"]])
     expect(result.not_ready_endpoints.map { |endpoint| endpoint.addresses }).to eq([["10.0.0.2"]])
     expect(result.unknown_readiness_endpoints.map { |endpoint| endpoint.addresses }).to eq([["10.0.0.3"]])
-    expect(result.usable_endpoints).to eq(result.ready_endpoints)
+    expect(result.usable_endpoints.map { |endpoint| endpoint.addresses }).to eq([["10.0.0.1"], ["10.0.0.3"]])
   end
 
-  it "does not treat unknown readiness as usable" do
+  it "treats unknown readiness as usable" do
     result = resolve(
       [slice("api-abc", service_name: "api", endpoints: [endpoint("10.0.0.3", ready: nil)])],
       service
     )
 
-    expect(result.usable_endpoints).to eq([])
+    expect(result.usable_endpoints).to eq([endpoint("10.0.0.3", ready: nil)])
   end
 end
