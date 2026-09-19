@@ -580,7 +580,46 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Named targetPort http resolved to 8080\n")
+    expect(stdout).to include("Target port named http\n  api-abc 8080\n")
+    expect(stderr).to eq("")
+  end
+
+  it "resolves a named targetPort to different numbers on usable pods" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service(ports: [service_port(80, name: "http", target_port_name: "http")]),
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [
+            endpoint("10.1.2.3", target_ref: target_ref("api-a")),
+            endpoint("10.1.2.4", target_ref: target_ref("api-b")),
+            endpoint("10.1.2.5", ready: false, target_ref: target_ref("api-c"))
+          ]
+        )
+      ],
+      pods: {
+        ["apps", "api-a"] => mapped_pod(
+          "api-a",
+          containers: [container("api", container_port(8080, name: "http"))]
+        ),
+        ["apps", "api-b"] => mapped_pod(
+          "api-b",
+          containers: [container("api", container_port(9090, name: "http"))]
+        ),
+        ["apps", "api-c"] => mapped_pod(
+          "api-c",
+          containers: [container("api", container_port(7070, name: "http"))]
+        )
+      }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Target port named http\n  api-a 8080\n  api-b 9090\n")
+    expect(stdout).not_to include("api-c 7070")
     expect(stderr).to eq("")
   end
 
@@ -605,7 +644,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Named targetPort http unresolved\n")
+    expect(stdout).to include("Named targetPort http unresolved\n  api-abc (not declared)\n")
     expect(stderr).to eq("")
   end
 

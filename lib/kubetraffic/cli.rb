@@ -67,7 +67,7 @@ module KubeTraffic
       print_service_match(match, service_result, client.namespace)
       print_endpoint_slices(service_result, endpoint_result)
       print_pods(endpoint_result, pod_result)
-      print_target_port(service_result, pod_result)
+      print_target_port(service_result, endpoint_result, pod_result)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
@@ -208,11 +208,12 @@ module KubeTraffic
       end
     end
 
-    def print_target_port(service_result, pod_result)
+    def print_target_port(service_result, endpoint_result, pod_result)
       port = service_result&.port
       return if port.nil?
 
-      result = Resolver::TargetPort.resolve(port, pod_result&.pods)
+      usable_pods = Resolver::Pod.for_usable_endpoints(pod_result, endpoint_result)
+      result = Resolver::TargetPort.resolve(port, usable_pods)
       if !port.target_port_number.nil?
         @stdout.puts "Target port #{port.target_port_number}"
         return
@@ -222,9 +223,18 @@ module KubeTraffic
       return if name.nil?
 
       if result.resolved
-        @stdout.puts "Named targetPort #{name} resolved to #{result.number}"
+        @stdout.puts "Target port named #{name}"
+        result.mappings.each do |mapping|
+          @stdout.puts "  #{mapping.pod.name} #{mapping.number}"
+        end
       else
         @stdout.puts "Named targetPort #{name} unresolved"
+        result.mappings.each do |mapping|
+          @stdout.puts "  #{mapping.pod.name} #{mapping.number}"
+        end
+        result.unresolved_pods.each do |pod|
+          @stdout.puts "  #{pod.name} (not declared)"
+        end
       end
     end
 

@@ -12,8 +12,9 @@ from retrieved `conditions.ready` values. `ready=true` and omitted/`nil` ready
 conditions are usable (Kubernetes treats nil as true); only `ready=false` is
 unusable. EndpointSlice `targetRef` values that name a Pod are fetched for
 name, IP, phase, and readiness. Numeric `targetPort` values are shown as
-retrieved. Named `targetPort` values are resolved against declared Pod
-container ports. Unresolved named ports are reported instead of guessed.
+retrieved. Named `targetPort` values are resolved per usable Pod. Different
+pods may map the same name to different numbers. Unresolved named ports are
+reported instead of guessed.
 
 ```text
 $ bin/kubetraffic --version
@@ -86,6 +87,8 @@ display-only. Only `ready=false` is unusable. Pods are resolved only from
 EndpointSlice `targetRef` entries of kind `Pod`. Missing Pods and missing
 target references are reported without matching endpoints to Pods by IP. A
 numeric Service `targetPort` is shown directly. A named `targetPort` is
-resolved only against retrieved Pod `containerPort` names. If the name is
-missing, conflicts, or no Pods were resolved, it is reported as unresolved.
-An omitted `targetPort` uses the Service port number, matching Kubernetes.
+resolved per usable endpoint Pod. Different pods may map the same name to
+different numbers. The name is unresolved only when an inspected usable Pod
+does not declare it unambiguously. An omitted `targetPort` uses the Service
+port number, matching Kubernetes. Not-ready endpoints are not used for
+named-port resolution.

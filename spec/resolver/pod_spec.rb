@@ -137,4 +137,22 @@ RSpec.describe KubeTraffic::Resolver::Pod do
 
     expect(result.pods).to eq([pod])
   end
+
+  def endpoint_result(endpoints)
+    KubeTraffic::Resolver::EndpointSlice::Result.new(slices: [], endpoints: endpoints)
+  end
+
+  it "selects pods for usable endpoints and ignores not-ready endpoint pods" do
+    ready_pod = mapped_pod("api-a")
+    not_ready_pod = mapped_pod("api-b")
+    pod_result = KubeTraffic::Resolver::Pod::Result.new(pods: [ready_pod, not_ready_pod], missing: [])
+    endpoints = endpoint_result(
+      [
+        endpoint("10.0.0.1", target_ref: target_ref("api-a")),
+        endpoint("10.0.0.2", ready: false, target_ref: target_ref("api-b"))
+      ]
+    )
+
+    expect(described_class.for_usable_endpoints(pod_result, endpoints)).to eq([ready_pod])
+  end
 end
