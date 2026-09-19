@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "errors"
+require_relative "ingress"
 
 module KubeTraffic
   module Kubernetes
@@ -14,26 +15,28 @@ module KubeTraffic
         new(context: context, kubeconfig: kubeconfig, namespace: namespace)
       end
 
-      def initialize(context: nil, kubeconfig: nil, api: nil, namespace: nil)
+      def initialize(context: nil, kubeconfig: nil, api: nil, networking_api: nil, namespace: nil)
         kube_context = nil
         @api = api || begin
           kube_context = load_kube_context(context: context, kubeconfig: kubeconfig)
           build_api(kube_context)
         end
+        @networking_api = networking_api || (kube_context && build_networking_api(kube_context))
         @namespace = resolve_namespace(namespace, kube_context)
       end
 
       def verify_connection!
-        require "kubeclient"
+        with_mapped_errors do
+          @api.api
+          true
+        end
+      end
 
-        @api.api
-        true
-      rescue Kubeclient::HttpError => e
-        raise mapped_http_error(e)
-      rescue Kubernetes::Error
-        raise
-      rescue StandardError => e
-        raise ConnectionError, "unable to connect to the Kubernetes API: #{e.message}"
+      def list_ingresses
+        with_mapped_errors do
+          resources = networking_api.get_ingresses(namespace: namespace)
+          Array(resources).map { |resource| map_ingress(resource) }.sort_by(&:name)
+        end
       end
 
       private
@@ -59,6 +62,56 @@ module KubeTraffic
           ssl_options: kube_context.ssl_options,
           auth_options: kube_context.auth_options
         )
+      end
+
+      def build_networking_api(kube_context)
+        require "kubeclient"
+
+        Kubeclient::Client.new(
+          "#{kube_context.api_endpoint}/apis/networking.k8s.io",
+          "v1",
+          ssl_options: kube_context.ssl_options,
+          auth_options: kube_context.auth_options
+        )
+      end
+
+      def networking_api
+        @networking_api or raise ConnectionError, "networking.k8s.io client is not configured"
+      end
+
+      def map_ingress(resource)
+        metadata = resource.metadata
+        Ingress.new(
+          name: metadata.name,
+          namespace: present(metadata.namespace) || namespace,
+          rules: Array(resource.spec&.rules).map { |rule| map_rule(rule) }
+        )
+      end
+
+      def map_rule(rule)
+        IngressRule.new(
+          host: present(rule.host),
+          paths: Array(rule.http&.paths).map { |http_path| map_path(http_path) }
+        )
+      end
+
+      def map_path(http_path)
+        IngressPath.new(
+          path: present(http_path.path) || "/",
+          path_type: present(http_path.pathType) || "ImplementationSpecific"
+        )
+      end
+
+      def with_mapped_errors
+        require "kubeclient"
+
+        yield
+      rescue Kubeclient::HttpError => e
+        raise mapped_http_error(e)
+      rescue Kubernetes::Error
+        raise
+      rescue StandardError => e
+        raise ConnectionError, "unable to connect to the Kubernetes API: #{e.message}"
       end
 
       def resolve_namespace(explicit, kube_context)

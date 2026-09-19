@@ -34,6 +34,20 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     Kubeclient::HttpError.new(code, message, nil)
   end
 
+  def ingress_resource(name:, namespace: "default", spec: nil)
+    Kubeclient::Resource.new(
+      "metadata" => { "name" => name, "namespace" => namespace },
+      "spec" => spec
+    )
+  end
+
+  def client_options
+    hash_including(
+      ssl_options: hash_including(:verify_ssl),
+      auth_options: hash_including(bearer_token: "fake-token")
+    )
+  end
+
   around do |example|
     original = ENV["KUBECONFIG"]
     example.run
@@ -45,17 +59,20 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     end
   end
 
-  it "loads kubeconfig and builds a core v1 client for the current context" do
+  it "loads kubeconfig and builds core and networking clients for the current context" do
     kubeconfig = write_kubeconfig
     api = instance_double(Kubeclient::Client)
+    networking_api = instance_double(Kubeclient::Client)
     expect(Kubeclient::Client).to receive(:new).with(
       "https://kube.example.test",
       "v1",
-      hash_including(
-        ssl_options: hash_including(:verify_ssl),
-        auth_options: hash_including(bearer_token: "fake-token")
-      )
+      client_options
     ).and_return(api)
+    expect(Kubeclient::Client).to receive(:new).with(
+      "https://kube.example.test/apis/networking.k8s.io",
+      "v1",
+      client_options
+    ).and_return(networking_api)
 
     ENV["KUBECONFIG"] = kubeconfig.path
     described_class.connect
@@ -76,7 +93,7 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
       ]
     )
     api = instance_double(Kubeclient::Client)
-    expect(Kubeclient::Client).to receive(:new).and_return(api)
+    expect(Kubeclient::Client).to receive(:new).twice.and_return(api)
 
     described_class.connect(context: "staging", kubeconfig: kubeconfig.path)
 
@@ -217,6 +234,106 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     }.to raise_error(
       KubeTraffic::Kubernetes::ConnectionError,
       /unable to connect to the Kubernetes API/
+    )
+  end
+
+  it "lists Ingress resources from the selected namespace" do
+    networking_api = double("networking_api")
+    expect(networking_api).to receive(:get_ingresses).with(namespace: "apps").and_return(
+      [
+        ingress_resource(
+          name: "web",
+          namespace: "apps",
+          spec: {
+            "rules" => [
+              {
+                "host" => "web.example.com",
+                "http" => {
+                  "paths" => [
+                    { "path" => "/app", "pathType" => "Prefix" }
+                  ]
+                }
+              }
+            ]
+          }
+        ),
+        ingress_resource(name: "api", namespace: "apps", spec: { "rules" => [] })
+      ]
+    )
+
+    ingresses = described_class.new(
+      api: instance_double(Kubeclient::Client),
+      networking_api: networking_api,
+      namespace: "apps"
+    ).list_ingresses
+
+    expect(ingresses.map(&:name)).to eq(%w[api web])
+    expect(ingresses.map(&:namespace).uniq).to eq(["apps"])
+    expect(ingresses.find { |ingress| ingress.name == "web" }.rules).to eq(
+      [
+        KubeTraffic::Kubernetes::IngressRule.new(
+          host: "web.example.com",
+          paths: [
+            KubeTraffic::Kubernetes::IngressPath.new(path: "/app", path_type: "Prefix")
+          ]
+        )
+      ]
+    )
+  end
+
+  it "maps missing Ingress path fields to Kubernetes defaults" do
+    networking_api = double("networking_api")
+    allow(networking_api).to receive(:get_ingresses).and_return(
+      [
+        ingress_resource(
+          name: "bare",
+          spec: {
+            "rules" => [
+              { "http" => { "paths" => [{ "path" => nil, "pathType" => nil }] } }
+            ]
+          }
+        )
+      ]
+    )
+
+    ingress = described_class.new(
+      api: instance_double(Kubeclient::Client),
+      networking_api: networking_api
+    ).list_ingresses.first
+
+    expect(ingress.rules.first.host).to be_nil
+    expect(ingress.rules.first.paths).to eq(
+      [KubeTraffic::Kubernetes::IngressPath.new(path: "/", path_type: "ImplementationSpecific")]
+    )
+  end
+
+  it "maps Ingress list authorization failures" do
+    networking_api = double("networking_api")
+    allow(networking_api).to receive(:get_ingresses).and_raise(http_error(403, "Forbidden"))
+
+    expect {
+      described_class.new(
+        api: instance_double(Kubeclient::Client),
+        networking_api: networking_api
+      ).list_ingresses
+    }.to raise_error(
+      KubeTraffic::Kubernetes::AuthorizationError,
+      /not authorized to access the Kubernetes API/
+    )
+  end
+
+  it "maps Ingress list HTTP errors as API errors" do
+    networking_api = double("networking_api")
+    allow(networking_api).to receive(:get_ingresses).and_raise(http_error(500, "Internal error"))
+
+    expect {
+      described_class.new(
+        api: instance_double(Kubeclient::Client),
+        networking_api: networking_api
+      ).list_ingresses
+    }.to raise_error(
+      KubeTraffic::Kubernetes::ApiError,
+      /Kubernetes API error/
     )
   end
 

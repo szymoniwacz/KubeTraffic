@@ -56,11 +56,25 @@ module KubeTraffic
 
       target = TargetParser.parse(raw)
       client = connect_to_cluster
+      ingresses = client.list_ingresses
       @stdout.puts "Tracing #{target} in namespace #{client.namespace}"
+      print_ingress_candidates(ingresses, client.namespace)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
       1
+    end
+
+    def print_ingress_candidates(ingresses, namespace)
+      if ingresses.empty?
+        @stdout.puts "No Ingress resources in namespace #{namespace}"
+        return
+      end
+
+      @stdout.puts "Ingress candidates:"
+      ingresses.each do |ingress|
+        @stdout.puts "  #{ingress.name}"
+      end
     end
 
     def connect_to_cluster
