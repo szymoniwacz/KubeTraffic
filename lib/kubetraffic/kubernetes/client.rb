@@ -3,12 +3,14 @@
 require_relative "errors"
 require_relative "ingress"
 require_relative "service"
+require_relative "endpoint_slice"
 
 module KubeTraffic
   module Kubernetes
     class Client
       DEFAULT_KUBECONFIG = File.join(Dir.home, ".kube", "config").freeze
       DEFAULT_NAMESPACE = "default"
+      SERVICE_NAME_LABEL = "kubernetes.io/service-name"
 
       attr_reader :namespace
 
@@ -16,13 +18,14 @@ module KubeTraffic
         new(context: context, kubeconfig: kubeconfig, namespace: namespace)
       end
 
-      def initialize(context: nil, kubeconfig: nil, api: nil, networking_api: nil, namespace: nil)
+      def initialize(context: nil, kubeconfig: nil, api: nil, networking_api: nil, discovery_api: nil, namespace: nil)
         kube_context = nil
         @api = api || begin
           kube_context = load_kube_context(context: context, kubeconfig: kubeconfig)
           build_api(kube_context)
         end
         @networking_api = networking_api || (kube_context && build_networking_api(kube_context))
+        @discovery_api = discovery_api || (kube_context && build_discovery_api(kube_context))
         @namespace = resolve_namespace(namespace, kube_context)
       end
 
@@ -50,6 +53,19 @@ module KubeTraffic
           return nil if not_found?(e)
 
           raise
+        end
+      end
+
+      def list_endpoint_slices(service_name)
+        name = present(service_name)
+        return [] if name.nil?
+
+        with_mapped_errors do
+          resources = discovery_api.get_endpoint_slices(
+            namespace: namespace,
+            label_selector: "#{SERVICE_NAME_LABEL}=#{name}"
+          )
+          Array(resources).map { |resource| map_endpoint_slice(resource) }.sort_by(&:name)
         end
       end
 
@@ -89,8 +105,23 @@ module KubeTraffic
         )
       end
 
+      def build_discovery_api(kube_context)
+        require "kubeclient"
+
+        Kubeclient::Client.new(
+          "#{kube_context.api_endpoint}/apis/discovery.k8s.io",
+          "v1",
+          ssl_options: kube_context.ssl_options,
+          auth_options: kube_context.auth_options
+        )
+      end
+
       def networking_api
         @networking_api or raise ConnectionError, "networking.k8s.io client is not configured"
+      end
+
+      def discovery_api
+        @discovery_api or raise ConnectionError, "discovery.k8s.io client is not configured"
       end
 
       def not_found?(error)
@@ -158,6 +189,36 @@ module KubeTraffic
           name: present(port.name),
           port: number
         )
+      end
+
+      def map_endpoint_slice(resource)
+        metadata = resource.metadata
+        EndpointSlice.new(
+          name: metadata.name,
+          namespace: present(metadata.namespace) || namespace,
+          service_name: label_value(metadata.labels, SERVICE_NAME_LABEL),
+          endpoints: Array(resource.endpoints).map { |endpoint| map_endpoint(endpoint) }
+        )
+      end
+
+      def map_endpoint(endpoint)
+        Endpoint.new(
+          addresses: Array(endpoint.addresses).filter_map { |address| present(address) }.sort,
+          ready: boolean_or_nil(endpoint.conditions&.ready)
+        )
+      end
+
+      def label_value(labels, key)
+        return nil if labels.nil?
+
+        value = labels[key] || labels[key.to_sym]
+        present(value)
+      end
+
+      def boolean_or_nil(value)
+        return nil if value.nil?
+
+        value == true || value.to_s.downcase == "true"
       end
 
       def integer_port(value)

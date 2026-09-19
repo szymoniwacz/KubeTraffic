@@ -83,10 +83,11 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     end
   end
 
-  it "loads kubeconfig and builds core and networking clients for the current context" do
+  it "loads kubeconfig and builds core, networking, and discovery clients for the current context" do
     kubeconfig = write_kubeconfig
     api = instance_double(Kubeclient::Client)
     networking_api = instance_double(Kubeclient::Client)
+    discovery_api = instance_double(Kubeclient::Client)
     expect(Kubeclient::Client).to receive(:new).with(
       "https://kube.example.test",
       "v1",
@@ -97,6 +98,11 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
       "v1",
       client_options
     ).and_return(networking_api)
+    expect(Kubeclient::Client).to receive(:new).with(
+      "https://kube.example.test/apis/discovery.k8s.io",
+      "v1",
+      client_options
+    ).and_return(discovery_api)
 
     ENV["KUBECONFIG"] = kubeconfig.path
     described_class.connect
@@ -117,7 +123,7 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
       ]
     )
     api = instance_double(Kubeclient::Client)
-    expect(Kubeclient::Client).to receive(:new).twice.and_return(api)
+    expect(Kubeclient::Client).to receive(:new).exactly(3).times.and_return(api)
 
     described_class.connect(context: "staging", kubeconfig: kubeconfig.path)
 
@@ -549,6 +555,106 @@ RSpec.describe KubeTraffic::Kubernetes::Client do
     }.to raise_error(
       KubeTraffic::Kubernetes::ApiError,
       /Kubernetes API error/
+    )
+  end
+
+  def listed_slices(resources, service_name: "api", namespace: "apps")
+    discovery_api = double("discovery_api")
+    allow(discovery_api).to receive(:get_endpoint_slices).and_return(resources)
+
+    described_class.new(
+      api: instance_double(Kubeclient::Client),
+      networking_api: double("networking_api"),
+      discovery_api: discovery_api,
+      namespace: namespace
+    ).list_endpoint_slices(service_name)
+  end
+
+  def slice_resource(name:, namespace: "apps", labels: { "kubernetes.io/service-name" => "api" }, endpoints: [])
+    Kubeclient::Resource.new(
+      "metadata" => { "name" => name, "namespace" => namespace, "labels" => labels },
+      "endpoints" => endpoints
+    )
+  end
+
+  it "lists EndpointSlices for a Service using the kubernetes.io/service-name label" do
+    discovery_api = double("discovery_api")
+    expect(discovery_api).to receive(:get_endpoint_slices).with(
+      namespace: "apps",
+      label_selector: "kubernetes.io/service-name=api"
+    ).and_return(
+      [
+        slice_resource(
+          name: "api-b",
+          endpoints: [
+            { "addresses" => ["10.1.2.4"], "conditions" => { "ready" => false } }
+          ]
+        ),
+        slice_resource(
+          name: "api-a",
+          endpoints: [
+            { "addresses" => ["10.1.2.3", " "], "conditions" => { "ready" => true } }
+          ]
+        )
+      ]
+    )
+
+    slices = described_class.new(
+      api: instance_double(Kubeclient::Client),
+      networking_api: double("networking_api"),
+      discovery_api: discovery_api,
+      namespace: "apps"
+    ).list_endpoint_slices("api")
+
+    expect(slices.map(&:name)).to eq(%w[api-a api-b])
+    expect(slices.map(&:service_name).uniq).to eq(["api"])
+    expect(slices.first.endpoints).to eq(
+      [KubeTraffic::Kubernetes::Endpoint.new(addresses: ["10.1.2.3"], ready: true)]
+    )
+    expect(slices.last.endpoints).to eq(
+      [KubeTraffic::Kubernetes::Endpoint.new(addresses: ["10.1.2.4"], ready: false)]
+    )
+  end
+
+  it "preserves unknown EndpointSlice readiness instead of inventing true or false" do
+    slices = listed_slices(
+      [
+        slice_resource(
+          name: "api-abc",
+          endpoints: [{ "addresses" => ["10.1.2.3"] }]
+        )
+      ]
+    )
+
+    expect(slices.first.endpoints.first.ready).to be_nil
+  end
+
+  it "returns no EndpointSlices when the Service name is blank" do
+    discovery_api = double("discovery_api")
+    expect(discovery_api).not_to receive(:get_endpoint_slices)
+
+    expect(
+      described_class.new(
+        api: instance_double(Kubeclient::Client),
+        networking_api: double("networking_api"),
+        discovery_api: discovery_api
+      ).list_endpoint_slices(" ")
+    ).to eq([])
+  end
+
+  it "maps EndpointSlice list authorization failures" do
+    discovery_api = double("discovery_api")
+    allow(discovery_api).to receive(:get_endpoint_slices).and_raise(http_error(403, "Forbidden"))
+
+    expect {
+      described_class.new(
+        api: instance_double(Kubeclient::Client),
+        networking_api: double("networking_api"),
+        discovery_api: discovery_api
+      ).list_endpoint_slices("api")
+    }.to raise_error(
+      KubeTraffic::Kubernetes::AuthorizationError,
+      /not authorized to access the Kubernetes API/
     )
   end
 

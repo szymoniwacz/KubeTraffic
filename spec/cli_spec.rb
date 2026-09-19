@@ -11,13 +11,14 @@ RSpec.describe KubeTraffic::CLI do
     [status, stdout.string, stderr.string]
   end
 
-  def stub_cluster(client: nil, namespace: "default", ingresses: [], service: nil)
+  def stub_cluster(client: nil, namespace: "default", ingresses: [], service: nil, endpoint_slices: [])
     fake = client || instance_double(
       KubeTraffic::Kubernetes::Client,
       verify_connection!: true,
       namespace: namespace,
       list_ingresses: ingresses,
-      get_service: service
+      get_service: service,
+      list_endpoint_slices: endpoint_slices
     )
     allow(KubeTraffic::Kubernetes::Client).to receive(:connect).and_return(fake)
     fake
@@ -60,6 +61,19 @@ RSpec.describe KubeTraffic::CLI do
 
   def mapped_service(name = "api", namespace: "apps", ports: [service_port(80, name: "http")])
     KubeTraffic::Kubernetes::Service.new(name: name, namespace: namespace, ports: ports)
+  end
+
+  def endpoint(*addresses, ready: true)
+    KubeTraffic::Kubernetes::Endpoint.new(addresses: addresses, ready: ready)
+  end
+
+  def endpoint_slice(name, service_name: "api", namespace: "apps", endpoints: [])
+    KubeTraffic::Kubernetes::EndpointSlice.new(
+      name: name,
+      namespace: namespace,
+      service_name: service_name,
+      endpoints: endpoints
+    )
   end
 
   it "prints the version for --version" do
@@ -134,7 +148,8 @@ RSpec.describe KubeTraffic::CLI do
       "  pathType Prefix\n" \
       "  service api:80\n" \
       "Service api\n" \
-      "  port 80 name http\n"
+      "  port 80 name http\n" \
+      "No EndpointSlices for Service api\n"
     )
     expect(stderr).to eq("")
   end
@@ -233,6 +248,70 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to include("  service api (backend port cannot be interpreted)\n")
     expect(stdout).to include("Service api\n  backend port cannot be interpreted\n")
+    expect(stderr).to eq("")
+  end
+
+  it "lists EndpointSlices labeled for the resolved Service" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [
+        endpoint_slice(
+          "api-xyz",
+          endpoints: [endpoint("10.1.2.4", ready: false), endpoint("10.1.2.3")]
+        ),
+        endpoint_slice("api-abc", endpoints: [endpoint("10.0.0.1")])
+      ]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include(
+      "EndpointSlice api-abc\n" \
+      "  10.0.0.1 ready=true\n" \
+      "EndpointSlice api-xyz\n" \
+      "  10.1.2.4 ready=false\n" \
+      "  10.1.2.3 ready=true\n"
+    )
+    expect(stderr).to eq("")
+  end
+
+  it "reports when the Service has no EndpointSlices" do
+    stub_cluster(namespace: "apps", ingresses: [matching_ingress], service: mapped_service)
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("No EndpointSlices for Service api\n")
+    expect(stderr).to eq("")
+  end
+
+  it "reports EndpointSlices that contain no endpoints" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service,
+      endpoint_slices: [endpoint_slice("api-empty")]
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("EndpointSlice api-empty\n  no endpoints\n")
+    expect(stdout).to include("No endpoints for Service api\n")
+    expect(stderr).to eq("")
+  end
+
+  it "does not look up EndpointSlices when the Service is missing" do
+    client = stub_cluster(namespace: "apps", ingresses: [matching_ingress], service: nil)
+    expect(client).not_to receive(:list_endpoint_slices)
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).not_to include("EndpointSlice")
     expect(stderr).to eq("")
   end
 
@@ -383,6 +462,25 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(1)
     expect(stdout).to eq("")
     expect(stderr).to include("Kubernetes API error: Service is forbidden")
+  end
+
+  it "reports kubernetes API errors when listing EndpointSlices" do
+    client = instance_double(
+      KubeTraffic::Kubernetes::Client,
+      verify_connection!: true,
+      namespace: "apps",
+      list_ingresses: [matching_ingress],
+      get_service: mapped_service
+    )
+    allow(client).to receive(:list_endpoint_slices)
+      .and_raise(KubeTraffic::Kubernetes::ApiError, "Kubernetes API error: EndpointSlice is forbidden")
+    stub_cluster(client: client)
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(1)
+    expect(stdout).to eq("")
+    expect(stderr).to include("Kubernetes API error: EndpointSlice is forbidden")
   end
 
   it "rejects an invalid trace target" do
