@@ -9,6 +9,20 @@ module KubeTraffic
         new(endpoints).resolve(client)
       end
 
+      def self.for_usable_endpoints(pod_result, endpoint_result)
+        return [] if pod_result.nil? || endpoint_result.nil?
+
+        keys = {}
+        Array(endpoint_result.usable_endpoints).each do |endpoint|
+          ref = endpoint.target_ref
+          next if ref.nil? || ref.kind != "Pod"
+
+          keys[[ref.namespace, ref.name]] = true
+        end
+
+        pod_result.pods.select { |pod| keys[[pod.namespace, pod.name]] }
+      end
+
       def initialize(endpoints)
         @endpoints = Array(endpoints)
       end

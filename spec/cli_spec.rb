@@ -60,8 +60,13 @@ RSpec.describe KubeTraffic::CLI do
     )
   end
 
-  def service_port(port, name: nil)
-    KubeTraffic::Kubernetes::ServicePort.new(name: name, port: port)
+  def service_port(port, name: nil, target_port_number: nil, target_port_name: nil)
+    KubeTraffic::Kubernetes::ServicePort.new(
+      name: name,
+      port: port,
+      target_port_number: target_port_number,
+      target_port_name: target_port_name
+    )
   end
 
   def mapped_service(name = "api", namespace: "apps", ports: [service_port(80, name: "http")])
@@ -76,14 +81,23 @@ RSpec.describe KubeTraffic::CLI do
     KubeTraffic::Kubernetes::TargetRef.new(kind: kind, namespace: namespace, name: name)
   end
 
-  def mapped_pod(name = "api-abc", namespace: "apps", ip: "10.1.2.3", phase: "Running", ready: true)
+  def mapped_pod(name = "api-abc", namespace: "apps", ip: "10.1.2.3", phase: "Running", ready: true, containers: [])
     KubeTraffic::Kubernetes::Pod.new(
       name: name,
       namespace: namespace,
       ip: ip,
       phase: phase,
-      ready: ready
+      ready: ready,
+      containers: containers
     )
+  end
+
+  def container(name, *ports)
+    KubeTraffic::Kubernetes::Container.new(name: name, ports: ports)
+  end
+
+  def container_port(number, name: nil)
+    KubeTraffic::Kubernetes::ContainerPort.new(name: name, container_port: number)
   end
 
   def endpoint_slice(name, service_name: "api", namespace: "apps", endpoints: [])
@@ -521,6 +535,116 @@ RSpec.describe KubeTraffic::CLI do
     expect(stdout).to include("Pod api-a\n")
     expect(stdout).not_to include("Pod api-b not found")
     expect(stdout).to include("Pod api-c not found in namespace apps\n")
+    expect(stderr).to eq("")
+  end
+
+  it "prints a numeric Service targetPort" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service(ports: [service_port(80, name: "http", target_port_number: 8080)]),
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.3", target_ref: target_ref("api-abc"))]
+        )
+      ],
+      pods: { ["apps", "api-abc"] => mapped_pod }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Target port 8080\n")
+    expect(stderr).to eq("")
+  end
+
+  it "resolves a named targetPort against Pod container ports" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service(ports: [service_port(80, name: "http", target_port_name: "http")]),
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.3", target_ref: target_ref("api-abc"))]
+        )
+      ],
+      pods: {
+        ["apps", "api-abc"] => mapped_pod(
+          containers: [container("api", container_port(8080, name: "http"))]
+        )
+      }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Target port named http\n  api-abc 8080\n")
+    expect(stderr).to eq("")
+  end
+
+  it "resolves a named targetPort to different numbers on usable pods" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service(ports: [service_port(80, name: "http", target_port_name: "http")]),
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [
+            endpoint("10.1.2.3", target_ref: target_ref("api-a")),
+            endpoint("10.1.2.4", target_ref: target_ref("api-b")),
+            endpoint("10.1.2.5", ready: false, target_ref: target_ref("api-c"))
+          ]
+        )
+      ],
+      pods: {
+        ["apps", "api-a"] => mapped_pod(
+          "api-a",
+          containers: [container("api", container_port(8080, name: "http"))]
+        ),
+        ["apps", "api-b"] => mapped_pod(
+          "api-b",
+          containers: [container("api", container_port(9090, name: "http"))]
+        ),
+        ["apps", "api-c"] => mapped_pod(
+          "api-c",
+          containers: [container("api", container_port(7070, name: "http"))]
+        )
+      }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Target port named http\n  api-a 8080\n  api-b 9090\n")
+    expect(stdout).not_to include("api-c 7070")
+    expect(stderr).to eq("")
+  end
+
+  it "reports an unresolved named targetPort" do
+    stub_cluster(
+      namespace: "apps",
+      ingresses: [matching_ingress],
+      service: mapped_service(ports: [service_port(80, name: "http", target_port_name: "http")]),
+      endpoint_slices: [
+        endpoint_slice(
+          "api-abc",
+          endpoints: [endpoint("10.1.2.3", target_ref: target_ref("api-abc"))]
+        )
+      ],
+      pods: {
+        ["apps", "api-abc"] => mapped_pod(
+          containers: [container("api", container_port(8080, name: "metrics"))]
+        )
+      }
+    )
+
+    status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
+
+    expect(status).to eq(0)
+    expect(stdout).to include("Named targetPort http unresolved\n  api-abc (not declared)\n")
     expect(stderr).to eq("")
   end
 
