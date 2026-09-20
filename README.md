@@ -4,7 +4,7 @@ Read-only CLI that traces how an HTTP request is routed through Kubernetes
 configuration:
 
 ```text
-Ingress -> Service -> EndpointSlice -> Pod -> Container/port
+Ingress -> Service -> EndpointSlice -> Pod -> targetPort -> Container/port declaration
 ```
 
 This is a configuration trace, not a packet capture. It explains which
