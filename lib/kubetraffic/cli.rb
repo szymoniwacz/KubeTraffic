@@ -4,6 +4,7 @@ require "optparse"
 require_relative "target_parser"
 require_relative "kubernetes"
 require_relative "resolver"
+require_relative "trace"
 
 module KubeTraffic
   class CLI
@@ -57,35 +58,29 @@ module KubeTraffic
 
       target = TargetParser.parse(raw)
       client = connect_to_cluster
-      ingresses = client.list_ingresses
-      match = Resolver::Ingress.match(ingresses, target)
-      service_result = resolve_service(match, client)
-      endpoint_result = resolve_endpoint_slices(service_result, client)
-      pod_result = resolve_pods(endpoint_result, client)
-      @stdout.puts "Tracing #{target} in namespace #{client.namespace}"
-      print_ingress_match(match, ingresses, target, client.namespace)
-      print_service_match(match, service_result, client.namespace)
-      print_endpoint_slices(service_result, endpoint_result)
-      print_pods(endpoint_result, pod_result)
-      print_target_port(service_result, endpoint_result, pod_result)
-      print_containers(service_result, endpoint_result, pod_result)
+      result = Trace::Builder.build(client, target)
+      @stdout.puts "Tracing #{result.target} in namespace #{result.namespace}"
+      print_ingress_match(result)
+      print_service_match(result)
+      print_endpoint_slices(result)
+      print_pods(result)
+      print_target_port(result)
+      print_containers(result)
+      print_warnings(result)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
       1
     end
 
-    def print_ingress_match(match, ingresses, target, namespace)
-      if ingresses.empty?
-        @stdout.puts "No Ingress resources in namespace #{namespace}"
+    def print_ingress_match(result)
+      finding = finding_for(result, "ingress_not_found")
+      if finding
+        @stdout.puts finding.summary
         return
       end
 
-      if match.nil?
-        @stdout.puts "No Ingress rule matches #{target} in namespace #{namespace}"
-        return
-      end
-
+      match = result.match
       @stdout.puts "Matched Ingress #{match.ingress.name}"
       @stdout.puts "  host #{format_host(match.rule.host)}"
       @stdout.puts "  path #{match.path.path}"
@@ -93,29 +88,24 @@ module KubeTraffic
       @stdout.puts "  #{format_backend(match.backend)}"
     end
 
-    def resolve_service(match, client)
-      backend = match&.backend
+    def print_service_match(result)
+      backend = result.match&.backend
       name = present(backend&.name)
-      return nil if name.nil?
+      service_result = result.service
+      return if name.nil? || service_result.nil?
 
-      Resolver::Service.resolve(client.get_service(name), backend)
-    end
-
-    def print_service_match(match, result, namespace)
-      backend = match&.backend
-      name = present(backend&.name)
-      return if name.nil? || result.nil?
-
-      if result.service.nil?
-        @stdout.puts "Service #{name} not found in namespace #{namespace}"
+      not_found = finding_for(result, "service_not_found")
+      if not_found
+        @stdout.puts not_found.summary
         return
       end
 
-      @stdout.puts "Service #{result.service.name}"
-      if result.port
-        @stdout.puts "  port #{format_service_port(result.port)}"
+      @stdout.puts "Service #{service_result.service.name}"
+      port_finding = finding_for(result, "service_port_not_found")
+      if service_result.port
+        @stdout.puts "  port #{format_service_port(service_result.port)}"
       else
-        @stdout.puts "  #{unmatched_service_port(backend)}"
+        @stdout.puts "  #{port_finding ? port_finding.summary : unmatched_service_port(backend)}"
       end
     end
 
@@ -134,24 +124,18 @@ module KubeTraffic
       end
     end
 
-    def resolve_endpoint_slices(service_result, client)
-      service = service_result&.service
-      return nil if service.nil?
+    def print_endpoint_slices(result)
+      service = result.service&.service
+      endpoints = result.endpoints
+      return if service.nil? || endpoints.nil?
 
-      Resolver::EndpointSlice.resolve(client.list_endpoint_slices(service.name), service)
-    end
-
-    def print_endpoint_slices(service_result, result)
-      service = service_result&.service
-      return if service.nil? || result.nil?
-
-      if result.slices.empty?
+      if endpoints.slices.empty?
         @stdout.puts "No EndpointSlices for Service #{service.name}"
-        @stdout.puts "No usable endpoints for Service #{service.name}"
+        @stdout.puts finding_for(result, "service_no_endpoints").summary
         return
       end
 
-      result.slices.each do |slice|
+      endpoints.slices.each do |slice|
         @stdout.puts "EndpointSlice #{slice.name}"
         if slice.endpoints.empty?
           @stdout.puts "  no endpoints"
@@ -163,58 +147,54 @@ module KubeTraffic
         end
       end
 
-      print_endpoint_readiness(service, result)
+      print_endpoint_readiness(result)
     end
 
-    def print_endpoint_readiness(service, result)
-      if result.endpoints.empty?
+    def print_endpoint_readiness(result)
+      service = result.service.service
+      endpoints = result.endpoints
+      no_endpoints = finding_for(result, "service_no_endpoints")
+      not_ready = finding_for(result, "endpoint_not_ready")
+
+      if endpoints.endpoints.empty?
         @stdout.puts "No endpoints for Service #{service.name}"
-        @stdout.puts "No usable endpoints for Service #{service.name}"
+        @stdout.puts no_endpoints.summary
         return
       end
 
-      @stdout.puts "  ready #{result.ready_endpoints.size}"
-      @stdout.puts "  not-ready #{result.not_ready_endpoints.size}"
-      @stdout.puts "  unknown readiness #{result.unknown_readiness_endpoints.size}"
-      return unless result.usable_endpoints.empty?
-
-      @stdout.puts "No usable endpoints for Service #{service.name}"
+      @stdout.puts "  ready #{endpoints.ready_endpoints.size}"
+      @stdout.puts "  not-ready #{endpoints.not_ready_endpoints.size}"
+      @stdout.puts "  unknown readiness #{endpoints.unknown_readiness_endpoints.size}"
+      @stdout.puts not_ready.summary if not_ready
     end
 
-    def resolve_pods(endpoint_result, client)
-      return nil if endpoint_result.nil?
+    def print_pods(result)
+      endpoints = result.endpoints
+      pods = result.pods
+      return if endpoints.nil? || pods.nil?
 
-      Resolver::Pod.resolve(endpoint_result.usable_endpoints, client)
-    end
-
-    def print_pods(endpoint_result, result)
-      return if endpoint_result.nil? || result.nil?
-
-      if endpoint_result.endpoints.any? && result.pods.empty? && result.missing.empty?
+      if endpoints.endpoints.any? && pods.pods.empty? && pods.missing.empty?
         @stdout.puts "No Pod target references"
         return
       end
 
-      result.pods.each do |pod|
+      pods.pods.each do |pod|
         @stdout.puts "Pod #{pod.name}"
         @stdout.puts "  IP #{pod.ip || "(unknown)"}"
         @stdout.puts "  phase #{pod.phase || "(unknown)"}"
         @stdout.puts "  ready=#{format_ready(pod.ready)}"
       end
 
-      result.missing.each do |ref|
-        namespace = present(ref.namespace)
-        suffix = namespace ? " in namespace #{namespace}" : ""
-        @stdout.puts "Pod #{ref.name} not found#{suffix}"
+      findings_for(result, "pod_not_found").each do |finding|
+        @stdout.puts finding.summary
       end
     end
 
-    def print_target_port(service_result, endpoint_result, pod_result)
-      port = service_result&.port
+    def print_target_port(result)
+      port = result.service&.port
       return if port.nil?
 
-      usable_pods = Resolver::Pod.for_usable_endpoints(pod_result, endpoint_result)
-      result = Resolver::TargetPort.resolve(port, usable_pods)
+      target = result.target_port
       if !port.target_port_number.nil?
         @stdout.puts "Target port #{port.target_port_number}"
         return
@@ -223,37 +203,36 @@ module KubeTraffic
       name = present(port.target_port_name)
       return if name.nil?
 
-      if result.resolved
+      unresolved = finding_for(result, "target_port_unresolved")
+      if target&.resolved
         @stdout.puts "Target port named #{name}"
-        result.mappings.each do |mapping|
+        Array(target.mappings).each do |mapping|
           @stdout.puts "  #{mapping.pod.name} #{mapping.number}"
         end
       else
-        @stdout.puts "Named targetPort #{name} unresolved"
-        result.mappings.each do |mapping|
+        @stdout.puts unresolved ? unresolved.summary : "Named targetPort #{name} unresolved"
+        Array(target&.mappings).each do |mapping|
           @stdout.puts "  #{mapping.pod.name} #{mapping.number}"
         end
-        result.unresolved_pods.each do |pod|
+        Array(target&.unresolved_pods).each do |pod|
           @stdout.puts "  #{pod.name} (not declared)"
         end
       end
     end
 
-    def print_containers(service_result, endpoint_result, pod_result)
-      port = service_result&.port
-      return if port.nil?
+    def print_containers(result)
+      return if result.service&.port.nil?
 
-      usable_pods = Resolver::Pod.for_usable_endpoints(pod_result, endpoint_result)
-      target = Resolver::TargetPort.resolve(port, usable_pods)
-      return unless target.resolved
+      target = result.target_port
+      return unless target&.resolved
 
-      result = Resolver::Container.resolve(usable_pods, target)
-      if result.matches.empty?
+      containers = result.containers
+      if containers.matches.empty?
         return if target.number.nil?
 
         @stdout.puts "No declared containerPort matches #{target.number}"
       else
-        result.matches.each do |match|
+        containers.matches.each do |match|
           @stdout.puts "Container #{match.container.name} on Pod #{match.pod.name}"
           @stdout.puts "  port #{format_container_port(match.port)}"
         end
@@ -261,9 +240,30 @@ module KubeTraffic
       @stdout.puts Resolver::Container::LISTENING_LIMITATION
     end
 
+    def print_warnings(result)
+      warnings = result.findings.select { |finding| finding.severity == :warning }
+      return if warnings.empty?
+
+      @stdout.puts "Warnings:"
+      warnings.each do |warning|
+        @stdout.puts "  #{warning.summary}"
+      end
+      if warnings.any? { |warning| warning.code == "container_port_unmatched" }
+        @stdout.puts "  #{Resolver::Container::LISTENING_LIMITATION}"
+      end
+    end
+
     def format_container_port(port)
       name = present(port.name)
       name ? "#{port.container_port} name #{name}" : port.container_port.to_s
+    end
+
+    def finding_for(result, code)
+      findings_for(result, code).first
+    end
+
+    def findings_for(result, code)
+      result.findings.select { |finding| finding.code == code }
     end
 
     def format_endpoint(endpoint)
