@@ -68,6 +68,7 @@ module KubeTraffic
       print_endpoint_slices(service_result, endpoint_result)
       print_pods(endpoint_result, pod_result)
       print_target_port(service_result, endpoint_result, pod_result)
+      print_containers(service_result, endpoint_result, pod_result)
       0
     rescue TargetParser::Error, Kubernetes::Error => e
       @stderr.puts e.message
@@ -236,6 +237,33 @@ module KubeTraffic
           @stdout.puts "  #{pod.name} (not declared)"
         end
       end
+    end
+
+    def print_containers(service_result, endpoint_result, pod_result)
+      port = service_result&.port
+      return if port.nil?
+
+      usable_pods = Resolver::Pod.for_usable_endpoints(pod_result, endpoint_result)
+      target = Resolver::TargetPort.resolve(port, usable_pods)
+      return unless target.resolved
+
+      result = Resolver::Container.resolve(usable_pods, target)
+      if result.matches.empty?
+        return if target.number.nil?
+
+        @stdout.puts "No declared containerPort matches #{target.number}"
+      else
+        result.matches.each do |match|
+          @stdout.puts "Container #{match.container.name} on Pod #{match.pod.name}"
+          @stdout.puts "  port #{format_container_port(match.port)}"
+        end
+      end
+      @stdout.puts Resolver::Container::LISTENING_LIMITATION
+    end
+
+    def format_container_port(port)
+      name = present(port.name)
+      name ? "#{port.container_port} name #{name}" : port.container_port.to_s
     end
 
     def format_endpoint(endpoint)

@@ -14,7 +14,9 @@ unusable. EndpointSlice `targetRef` values that name a Pod are fetched for
 name, IP, phase, and readiness. Numeric `targetPort` values are shown as
 retrieved. Named `targetPort` values are resolved per usable Pod. Different
 pods may map the same name to different numbers. Unresolved named ports are
-reported instead of guessed.
+reported instead of guessed. The trace then shows the matching container
+`containerPort` and states that this declaration does not prove a process is
+listening.
 
 ```text
 $ bin/kubetraffic --version
@@ -39,6 +41,9 @@ Pod api-abc
   phase Running
   ready=true
 Target port 8080
+Container api on Pod api-abc
+  port 8080 name http
+declared containerPort is configuration, not proof a process is listening
 
 $ bin/kubetraffic --context staging -n apps trace api.example.com/users
 Tracing api.example.com/users in namespace apps
@@ -59,6 +64,9 @@ Pod api-abc
   phase Running
   ready=true
 Target port 8080
+Container api on Pod api-abc
+  port 8080 name http
+declared containerPort is configuration, not proof a process is listening
 ```
 
 `trace` loads kubeconfig from `KUBECONFIG` or `~/.kube/config` and verifies that
@@ -91,4 +99,5 @@ resolved per usable endpoint Pod. Different pods may map the same name to
 different numbers. The name is unresolved only when an inspected usable Pod
 does not declare it unambiguously. An omitted `targetPort` uses the Service
 port number, matching Kubernetes. Not-ready endpoints are not used for
-named-port resolution.
+named-port resolution. A matching declared `containerPort` is shown as the last
+hop. That field is configuration metadata, not proof that a process is listening.
