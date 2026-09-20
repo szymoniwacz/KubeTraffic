@@ -11,6 +11,17 @@ RSpec.describe KubeTraffic::CLI do
     [status, stdout.string, stderr.string]
   end
 
+  def no_ingress_output(namespace)
+    <<~TEXT
+      Tracing api.example.com/users in namespace #{namespace}
+
+      [x] Ingress
+           No Ingress resources in namespace #{namespace}
+
+      Result: failed (ingress_not_found)
+    TEXT
+  end
+
   def stub_cluster(client: nil, namespace: "default", ingresses: [], service: nil, endpoint_slices: [], pods: {})
     fake = client || instance_double(
       KubeTraffic::Kubernetes::Client,
@@ -147,10 +158,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("trace", "https://api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq(
-      "Tracing api.example.com/users in namespace default\n" \
-      "No Ingress resources in namespace default\n"
-    )
+    expect(stdout).to eq(no_ingress_output("default"))
     expect(stderr).to eq("")
   end
 
@@ -160,10 +168,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq(
-      "Tracing api.example.com/users in namespace default\n" \
-      "No Ingress resources in namespace default\n"
-    )
+    expect(stdout).to eq(no_ingress_output("default"))
     expect(stderr).to eq("")
   end
 
@@ -175,15 +180,21 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to eq(
       "Tracing api.example.com/users in namespace apps\n" \
-      "Matched Ingress api\n" \
-      "  host api.example.com\n" \
-      "  path /users\n" \
-      "  pathType Prefix\n" \
-      "  service api:80\n" \
-      "Service api\n" \
-      "  port 80 name http\n" \
-      "No EndpointSlices for Service api\n" \
-      "No usable endpoints for Service api\n"
+      "\n" \
+      "[ok] Ingress api\n" \
+      "     host api.example.com\n" \
+      "     path /users\n" \
+      "     pathType Prefix\n" \
+      "     service api:80\n" \
+      "\n" \
+      "[ok] Service api\n" \
+      "     port 80 name http\n" \
+      "\n" \
+      "[x] EndpointSlice\n" \
+      "     No EndpointSlices for Service api\n" \
+      "     No usable endpoints for Service api\n" \
+      "\n" \
+      "Result: failed (service_no_endpoints)\n"
     )
     expect(stderr).to eq("")
   end
@@ -214,7 +225,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Service api\n  port 80 name http\n")
+    expect(stdout).to include("[ok] Service api\n     port 80 name http\n")
     expect(stderr).to eq("")
   end
 
@@ -231,7 +242,7 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("  service api:https\n")
-    expect(stdout).to include("Service api\n  port 443 name https\n")
+    expect(stdout).to include("[ok] Service api\n     port 443 name https\n")
     expect(stderr).to eq("")
   end
 
@@ -242,7 +253,7 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("  service api:80\n")
-    expect(stdout).to include("Service api not found in namespace apps\n")
+    expect(stdout).to include("[x] Service api\n     Service api not found in namespace apps\n")
     expect(stderr).to eq("")
   end
 
@@ -256,7 +267,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Service api\n  no port matches 8080\n")
+    expect(stdout).to include("[x] Service api\n     no port matches 8080\n")
     expect(stderr).to eq("")
   end
 
@@ -281,7 +292,7 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include("  service api (backend port cannot be interpreted)\n")
-    expect(stdout).to include("Service api\n  backend port cannot be interpreted\n")
+    expect(stdout).to include("[x] Service api\n     backend port cannot be interpreted\n")
     expect(stderr).to eq("")
   end
 
@@ -303,13 +314,16 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include(
-      "EndpointSlice api-abc\n" \
-      "  10.0.0.1 ready=true\n" \
-      "EndpointSlice api-xyz\n" \
-      "  10.1.2.4 ready=false\n" \
-      "  10.1.2.3 ready=true\n"
+      "[ok] EndpointSlice\n" \
+      "     api-abc\n" \
+      "       10.0.0.1 ready=true\n" \
+      "     api-xyz\n" \
+      "       10.1.2.4 ready=false\n" \
+      "       10.1.2.3 ready=true\n"
     )
-    expect(stdout).to include("No Pod target references\n")
+    expect(stdout).not_to include("[x] Pod")
+    expect(stdout).to include("Warnings:\n     Usable endpoints have no Pod targetRef\n")
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -335,7 +349,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("EndpointSlice api-empty\n  no endpoints\n")
+    expect(stdout).to include("[x] EndpointSlice\n     api-empty\n       no endpoints\n")
     expect(stdout).to include("No endpoints for Service api\n")
     expect(stdout).to include("No usable endpoints for Service api\n")
     expect(stderr).to eq("")
@@ -368,11 +382,13 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("  10.1.2.3 ready=true\n")
-    expect(stdout).to include("  10.1.2.4 ready=false\n")
-    expect(stdout).to include("  ready 1\n  not-ready 1\n  unknown readiness 0\n")
+    expect(stdout).to include("     10.1.2.3 ready=true\n")
+    expect(stdout).to include("     10.1.2.4 ready=false\n")
+    expect(stdout).to include("     ready 1\n     not-ready 1\n     unknown readiness 0\n")
     expect(stdout).not_to include("No usable endpoints")
-    expect(stdout).to include("No Pod target references\n")
+    expect(stdout).not_to include("[x] Pod")
+    expect(stdout).to include("Warnings:\n     Usable endpoints have no Pod targetRef\n")
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -392,9 +408,10 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("  ready 0\n  not-ready 2\n  unknown readiness 0\n")
+    expect(stdout).to include("     ready 0\n     not-ready 2\n     unknown readiness 0\n")
     expect(stdout).to include("No usable endpoints for Service api\n")
-    expect(stdout).to include("No Pod target references\n")
+    expect(stdout).to include("Result: failed (endpoint_not_ready)\n")
+    expect(stdout).not_to include("No Pod target references")
     expect(stderr).to eq("")
   end
 
@@ -414,9 +431,11 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("  ready 0\n  not-ready 1\n  unknown readiness 1\n")
+    expect(stdout).to include("     ready 0\n     not-ready 1\n     unknown readiness 1\n")
     expect(stdout).not_to include("No usable endpoints")
-    expect(stdout).to include("No Pod target references\n")
+    expect(stdout).not_to include("[x] Pod")
+    expect(stdout).to include("Warnings:\n     Usable endpoints have no Pod targetRef\n")
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -438,10 +457,10 @@ RSpec.describe KubeTraffic::CLI do
 
     expect(status).to eq(0)
     expect(stdout).to include(
-      "Pod api-abc\n" \
-      "  IP 10.1.2.3\n" \
-      "  phase Running\n" \
-      "  ready=true\n"
+      "[ok] Pod api-abc\n" \
+      "     IP 10.1.2.3\n" \
+      "     phase Running\n" \
+      "     ready=true\n"
     )
     expect(stderr).to eq("")
   end
@@ -555,11 +574,13 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Target port 8080\n")
-    expect(stdout).to include("No declared containerPort matches 8080\n")
+    expect(stdout).to include("[ok] Target port\n     8080\n")
+    expect(stdout).not_to include("[x]")
+    expect(stdout).to include("Warnings:\n     No declared containerPort matches 8080\n")
     expect(stdout).to include(
       "declared containerPort is configuration, not proof a process is listening\n"
     )
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -584,8 +605,8 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Target port named http\n  api-abc 8080\n")
-    expect(stdout).to include("Container api on Pod api-abc\n  port 8080 name http\n")
+    expect(stdout).to include("[ok] Target port\n     named http\n     api-abc 8080\n")
+    expect(stdout).to include("[ok] Container api on Pod api-abc\n     port 8080 name http\n")
     expect(stdout).to include(
       "declared containerPort is configuration, not proof a process is listening\n"
     )
@@ -626,10 +647,11 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Target port named http\n  api-a 8080\n  api-b 9090\n")
+    expect(stdout).to include("[ok] Target port\n     named http\n     api-a 8080\n     api-b 9090\n")
     expect(stdout).not_to include("api-c 7070")
-    expect(stdout).to include("Container api on Pod api-a\n  port 8080 name http\n")
-    expect(stdout).to include("Container api on Pod api-b\n  port 9090 name http\n")
+    expect(stdout).to include("[ok] Container api on Pod api-a\n     port 8080 name http\n")
+    expect(stdout).to include("[ok] Container api on Pod api-b\n     port 9090 name http\n")
+    expect(stdout).to include("Result: configuration chain complete\n")
     expect(stderr).to eq("")
   end
 
@@ -654,7 +676,12 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Named targetPort http unresolved\n  api-abc (not declared)\n")
+    expect(stdout).to include(
+      "[x] Target port\n" \
+      "     Named targetPort http unresolved\n" \
+      "     api-abc (not declared)\n"
+    )
+    expect(stdout).to include("Result: failed (target_port_unresolved)\n")
     expect(stdout).not_to include("Container ")
     expect(stdout).not_to include("declared containerPort")
     expect(stderr).to eq("")
@@ -681,7 +708,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to include("Container api on Pod api-abc\n  port 8080\n")
+    expect(stdout).to include("[ok] Container api on Pod api-abc\n     port 8080\n")
     expect(stdout).to include(
       "declared containerPort is configuration, not proof a process is listening\n"
     )
@@ -712,7 +739,11 @@ RSpec.describe KubeTraffic::CLI do
     expect(status).to eq(0)
     expect(stdout).to eq(
       "Tracing api.example.com/users in namespace apps\n" \
-      "No Ingress rule matches api.example.com/users in namespace apps\n"
+      "\n" \
+      "[x] Ingress\n" \
+      "     No Ingress rule matches api.example.com/users in namespace apps\n" \
+      "\n" \
+      "Result: failed (ingress_not_found)\n"
     )
     expect(stderr).to eq("")
   end
@@ -726,10 +757,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--context", "staging", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq(
-      "Tracing api.example.com/users in namespace default\n" \
-      "No Ingress resources in namespace default\n"
-    )
+    expect(stdout).to eq(no_ingress_output("default"))
     expect(stderr).to eq("")
   end
 
@@ -742,10 +770,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("--namespace", "apps", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq(
-      "Tracing api.example.com/users in namespace apps\n" \
-      "No Ingress resources in namespace apps\n"
-    )
+    expect(stdout).to eq(no_ingress_output("apps"))
     expect(stderr).to eq("")
   end
 
@@ -758,10 +783,7 @@ RSpec.describe KubeTraffic::CLI do
     status, stdout, stderr = run("-n", "kube-system", "trace", "api.example.com/users")
 
     expect(status).to eq(0)
-    expect(stdout).to eq(
-      "Tracing api.example.com/users in namespace kube-system\n" \
-      "No Ingress resources in namespace kube-system\n"
-    )
+    expect(stdout).to eq(no_ingress_output("kube-system"))
     expect(stderr).to eq("")
   end
 

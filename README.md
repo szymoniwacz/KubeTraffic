@@ -16,7 +16,9 @@ retrieved. Named `targetPort` values are resolved per usable Pod. Different
 pods may map the same name to different numbers. Unresolved named ports are
 reported instead of guessed. The trace then shows the matching container
 `containerPort` and states that this declaration does not prove a process is
-listening. Failures are recorded as structured findings with codes such as
+listening. Output is an ordered plaintext trace with `[ok]`/`[x]` markers and a
+final result line. It does not use ANSI color. Failures are recorded as
+structured findings with codes such as
 `ingress_not_found`, `service_not_found`, `service_port_not_found`,
 `service_no_endpoints`, `endpoint_not_ready`, `pod_not_found`, and
 `target_port_unresolved`.
@@ -27,49 +29,36 @@ KubeTraffic 0.0.1
 
 $ bin/kubetraffic trace https://api.example.com/users
 Tracing api.example.com/users in namespace default
-Matched Ingress api
-  host api.example.com
-  path /users
-  pathType Prefix
-  service api:80
-Service api
-  port 80 name http
-EndpointSlice api-abc
-  10.1.2.3 ready=true
-  ready 1
-  not-ready 0
-  unknown readiness 0
-Pod api-abc
-  IP 10.1.2.3
-  phase Running
-  ready=true
-Target port 8080
-Container api on Pod api-abc
-  port 8080 name http
-declared containerPort is configuration, not proof a process is listening
 
-$ bin/kubetraffic --context staging -n apps trace api.example.com/users
-Tracing api.example.com/users in namespace apps
-Matched Ingress api
-  host api.example.com
-  path /users
-  pathType Prefix
-  service api:80
-Service api
-  port 80 name http
-EndpointSlice api-abc
-  10.1.2.3 ready=true
-  ready 1
-  not-ready 0
-  unknown readiness 0
-Pod api-abc
-  IP 10.1.2.3
-  phase Running
-  ready=true
-Target port 8080
-Container api on Pod api-abc
-  port 8080 name http
-declared containerPort is configuration, not proof a process is listening
+[ok] Ingress api
+     host api.example.com
+     path /users
+     pathType Prefix
+     service api:80
+
+[ok] Service api
+     port 80 name http
+
+[ok] EndpointSlice
+     api-abc
+       10.1.2.3 ready=true
+     ready 1
+     not-ready 0
+     unknown readiness 0
+
+[ok] Pod api-abc
+     IP 10.1.2.3
+     phase Running
+     ready=true
+
+[ok] Target port
+     8080
+
+[ok] Container api on Pod api-abc
+     port 8080 name http
+     declared containerPort is configuration, not proof a process is listening
+
+Result: configuration chain complete
 ```
 
 `trace` loads kubeconfig from `KUBECONFIG` or `~/.kube/config` and verifies that
